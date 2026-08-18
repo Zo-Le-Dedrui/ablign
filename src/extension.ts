@@ -31,6 +31,7 @@ import {
 } from "./audio/codec.js";
 import {
   alignAgainst,
+  chainReference,
   prepareGuide,
   DEFAULT_SETTINGS,
   type AlignResult,
@@ -56,6 +57,8 @@ interface DialogResult extends Partial<AlignSettings> {
   guide?: number;
   dubs?: number[];
   destination?: Destination;
+  /** Let each double also match against the ones already aligned above it. */
+  chain?: boolean;
 }
 
 type Context = ExtensionContext<"1.0.0">;
@@ -463,6 +466,7 @@ export function activate(activation: ActivationContext) {
         mode: "settings",
         range: `${seconds.toFixed(1)} s selected`,
         tracks: names,
+        chain: false,
         settings: {
           strength: DEFAULT_SETTINGS.strength,
           maxShift: DEFAULT_SETTINGS.maxShiftMs,
@@ -485,6 +489,7 @@ export function activate(activation: ActivationContext) {
       gateDb: answer.gateDb ?? DEFAULT_SETTINGS.gateDb,
     };
     const destination: Destination = answer.destination ?? "replace";
+    const chain = answer.chain === true;
 
     const guideIndex = answer.guide ?? 0;
     const doubles = (answer.dubs ?? [])
@@ -528,8 +533,10 @@ export function activate(activation: ActivationContext) {
           if (abortSignal.aborted) return;
 
           // The guide is the same for every double, so its features are worth
-          // computing once even when only one double is queued.
-          const guide = prepareGuide(guideAudio, settings);
+          // computing once even when only one double is queued. With chaining
+          // on it also grows: each aligned take joins the references the next
+          // one gets to match against.
+          let guide = prepareGuide(guideAudio, settings);
           const share = 96 / doubles.length;
 
           for (const [position, index] of doubles.entries()) {
@@ -572,6 +579,10 @@ export function activate(activation: ActivationContext) {
             );
             if (report.stillPlaying?.length) stillPlaying.push(...report.stillPlaying);
             if (report.rebuilt) rebuilt.push(report.rebuilt);
+
+            // Chained after placing, not before, so a cancelled run leaves
+            // nothing half-referenced.
+            if (chain) guide = chainReference(guide, result, settings);
 
             if (result.cost > MISMATCH_COST) poor.push(dubName);
             console.log(

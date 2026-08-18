@@ -64,7 +64,8 @@ export interface AlignResult {
  * none of the benefit.
  */
 export interface PreparedGuide {
-  features: FeatureTrack;
+  /** The lead first, then any aligned doubles chained on after it. */
+  features: FeatureTrack[];
   length: number;
   sampleRate: number;
 }
@@ -74,9 +75,41 @@ export function prepareGuide(guide: DecodedAudio, settings: AlignSettings): Prep
     throw new Error("Selection is too short to align — use at least half a second.");
   }
   return {
-    features: extractAlignmentFeatures(toMono(guide), guide.sampleRate, settings.gateDb),
+    features: [extractAlignmentFeatures(toMono(guide), guide.sampleRate, settings.gateDb)],
     length: guide.length,
     sampleRate: guide.sampleRate,
+  };
+}
+
+/**
+ * Adds an already-aligned take to the references a later double will match
+ * against.
+ *
+ * It sits on the guide's timeline now, so it can be compared frame for frame.
+ * A backing part usually resembles the backing part beside it — same register,
+ * same delivery — more closely than it resembles the lead, so having both to
+ * choose from is most useful exactly where the lead alone is ambiguous.
+ */
+export function chainReference(
+  guide: PreparedGuide,
+  aligned: AlignResult,
+  settings: AlignSettings,
+): PreparedGuide {
+  const mono =
+    aligned.channels.length === 1
+      ? aligned.channels[0]!
+      : toMono({
+          sampleRate: aligned.sampleRate,
+          channels: aligned.channels,
+          length: aligned.channels[0]!.length,
+        });
+
+  return {
+    ...guide,
+    features: [
+      ...guide.features,
+      extractAlignmentFeatures(mono, aligned.sampleRate, settings.gateDb),
+    ],
   };
 }
 

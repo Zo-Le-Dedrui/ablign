@@ -37,12 +37,20 @@ export interface DtwResult {
 /**
  * @param radius - Band half-width in frames; the largest shift the path may use.
  */
+/**
+ * @param guides - References to match against, all on the same timeline and of
+ *   the same length. More than one is the point of chaining: a double often
+ *   resembles the double above it more than it resembles the lead, and taking
+ *   whichever agrees best at each frame lets it use both. The frames where they
+ *   disagree are exactly the ambiguous ones.
+ */
 export async function alignFeatureTracks(
-  guide: FeatureTrack,
+  guides: FeatureTrack[],
   dub: FeatureTrack,
   radius: number,
   progress: DtwProgress = {},
 ): Promise<DtwResult> {
+  const guide = guides[0]!;
   const n = guide.frameCount;
   const m = dub.frameCount;
   if (n < 4 || m < 4) throw new Error("Selection is too short to align.");
@@ -70,16 +78,28 @@ export async function alignFeatureTracks(
     );
   }
 
-  const guideData = guide.data;
+  // Only references that line up frame for frame can be compared this way.
+  const references = guides
+    .filter((track) => track.frameCount === n)
+    .map((track) => track.data);
   const dubData = dub.data;
 
-  /** Cosine distance in [0, 2]; both sides are unit vectors. */
+  /**
+   * Cosine distance in [0, 2]; both sides are unit vectors. With several
+   * references, the closest one wins the frame — an average would let a
+   * reference that is wrong here blur one that is right.
+   */
   const distance = (i: number, j: number): number => {
     const a = i * FEATURE_SIZE;
     const b = j * FEATURE_SIZE;
-    let dot = 0;
-    for (let k = 0; k < FEATURE_SIZE; k++) dot += guideData[a + k]! * dubData[b + k]!;
-    return 1 - dot;
+    let best = Infinity;
+    for (const data of references) {
+      let dot = 0;
+      for (let k = 0; k < FEATURE_SIZE; k++) dot += data[a + k]! * dubData[b + k]!;
+      const cost = 1 - dot;
+      if (cost < best) best = cost;
+    }
+    return best;
   };
 
   const local = new Float32Array(cells);

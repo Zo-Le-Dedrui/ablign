@@ -415,20 +415,36 @@ export function activate(activation: ActivationContext) {
     const from = selection.time_selection_start;
     const to = selection.time_selection_end;
 
+    // A group of audio tracks is an AudioTrack as far as the API is concerned,
+    // but renderPreFxAudio refuses one — rejecting with nothing, which used to
+    // take the whole run down. There is no "is a group" flag; a group is
+    // whatever some other track calls its groupTrack.
+    const groupIds = new Set<bigint>();
+    for (const track of context.application.song?.tracks ?? []) {
+      const group = track.groupTrack;
+      if (group) groupIds.add(group.handle.id);
+    }
+
     const handles: Handle[] = [];
     const names: string[] = [];
+    let groupsSkipped = 0;
     for (const handle of selection.selected_lanes) {
       const object = context.getObjectFromHandle(handle, DataModelObject);
-      if (object instanceof AudioTrack) {
-        handles.push(handle);
-        names.push(object.name);
+      if (!(object instanceof AudioTrack)) continue;
+      if (groupIds.has(handle.id)) {
+        groupsSkipped++;
+        continue;
       }
+      handles.push(handle);
+      names.push(object.name);
     }
 
     if (handles.length < 2) {
       await showMessage(
         context,
-        "Ablign needs at least two audio tracks: the guide, and one or more doubles. Drag a time range across all of them, then right-click inside it.",
+        groupsSkipped > 0
+          ? "Ablign needs at least two ordinary audio tracks. Group tracks cannot be rendered, so they are left out — select the tracks inside the group instead."
+          : "Ablign needs at least two audio tracks: the guide, and one or more doubles. Drag a time range across all of them, then right-click inside it.",
       );
       return;
     }
@@ -474,6 +490,10 @@ export function activate(activation: ActivationContext) {
     const doubles = (answer.dubs ?? [])
       .filter((index) => index !== guideIndex && index >= 0 && index < handles.length);
     if (!doubles.length) return;
+
+    if (groupsSkipped > 0) {
+      console.log(`[Ablign] left out ${groupsSkipped} group track(s): they cannot be rendered`);
+    }
 
     const poor: string[] = [];
     const stillPlaying: string[] = [];

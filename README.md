@@ -97,6 +97,7 @@ Live's own rendering usually costs more than the alignment does, and the guide i
 
 - **Not calibrated on real voices.** Every number above comes from synthetic takes. The defaults are reasoned and measured, but measured against a signal generator — expect to move Smoothing and Max stretch on real material.
 - **Arrangement only.** `renderPreFxAudio` takes beat positions on a track, so a Session slot has no range to render.
+- **No group tracks.** A group of audio tracks is an `AudioTrack` to the API, but Live refuses to render one, so groups are left out of the selection. Pick the tracks inside the group.
 - **WSOLA, not Élastique.** Held vowels stretched hard can warble. Lowering Max stretch is the lever, at the cost of tightness.
 - **The takes must be the same part.** A poor match is logged rather than raised, so a confident wrong answer on genuinely different material is possible. A finished run never interrupts: only a request Ablign cannot carry out, or one that failed, opens a dialog.
 - **Monophonic material.** The features describe one spectral shape per frame; two singers in one track will not align sensibly. A stereo backing pair is fine — align the left and right tracks separately against the lead, which is what ticking both does.

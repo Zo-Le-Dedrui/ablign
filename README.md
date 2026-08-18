@@ -74,6 +74,7 @@ It shipped at ±40 % and that was the wrong call: it spent its budget flattening
 | Onset error, same take | 42 ms → **2 ms** (27.9x better) |
 | Self-alignment is a no-op | peak shift 0.0 ms, residual **−120 dB** |
 | Stereo channels stay locked | worst deviation 2.5e-7 |
+| Strength is proportional | 100 % lands 1.9 ms out, 50 % 19.7 ms, 0 % 40.8 ms |
 | Strength 0 bypasses | 42 ms → 42 ms |
 | Max stretch actually binds | harsh double: 31 ms at ±40 %, **9 ms** at ±150 % |
 | Level preserved | peak 0.483 vs source 0.483 |
@@ -84,10 +85,10 @@ The waveform-lag figure correlates envelopes rather than raw samples: the noisy 
 
 `tools/dialog-check.ts` covers what TypeScript cannot see. The dialog is an inlined string reached over `postMessage`, so nothing type-checks across that boundary: it asserts every `getElementById` resolves, that the slider readouts pair up, that every field the dialog emits is one the command actually reads, and that a track named `</script>` cannot break out of the page. `tools/activate-check.ts` requires the built bundle against a stub host and asserts it registers.
 
-`npx tsx tools/tighten.ts` sweeps Smoothing against Max stretch on voice-like material — that is where the ±40 % problem showed up. `npx tsx tools/timing.ts` for runtime, roughly **38 ms per second of stereo audio**, scaling linearly:
+`npx tsx tools/tighten.ts` sweeps Smoothing against Max stretch on voice-like material — that is where the ±40 % problem showed up. `npx tsx tools/timing.ts` for runtime, around **22 ms per second of stereo audio** on the machine it was written on, scaling linearly:
 
 ```
- 10s stereo:   378 ms, 60s: 2130 ms, 180s: 6796 ms
+ 10s stereo:   236 ms, 60s: 1330 ms, 180s: 3721 ms
 ```
 
 Live's own rendering usually costs more than the alignment does, and the guide is only rendered once per run. Everything runs under a cancellable progress dialog.

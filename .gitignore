@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+
+# The Ableton Extensions SDK licence forbids redistributing the SDK itself.
+# Fetch it from ableton.com and drop the .tgz files in vendor/ yourself.
+vendor/*.tgz

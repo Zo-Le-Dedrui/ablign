@@ -1,0 +1,205 @@
+/**
+ * Banded dynamic time warping between two feature tracks.
+ *
+ * Both takes are rendered from the same arrangement selection, so the answer
+ * always lives near the diagonal — a full N x M cost matrix would spend
+ * essentially all of its memory on alignments no vocalist could produce. The
+ * band is the user's "max shift" expressed in frames, which keeps the cost
+ * linear in the selection length and doubles as a guarantee: the result can
+ * never drift further than the user allowed.
+ *
+ * The step pattern is the symmetric type-III set {(1,1), (1,2), (2,1)}, which
+ * bounds the local slope to [1/2, 2]. Plain {(1,1), (0,1), (1,0)} would let the
+ * path run along a row for free, mapping an entire held vowel onto one dub
+ * frame and stuttering it on playback.
+ */
+import { FEATURE_SIZE, type FeatureTrack } from "./features.js";
+
+/** Refuse rather than ask Live for a gigabyte. Roughly 10 min at ±300 ms. */
+const MAX_CELLS = 48_000_000;
+
+const STEP_DIAGONAL = 0;
+const STEP_WIDE = 1; // (i-1, j-2): the dub covers two frames while the guide covers one
+const STEP_TALL = 2; // (i-2, j-1): the guide covers two frames while the dub covers one
+
+export interface DtwProgress {
+  onProgress?: (fraction: number) => Promise<void>;
+  shouldAbort?: () => boolean;
+}
+
+export interface DtwResult {
+  /** Per guide frame, the fractional dub frame it maps to. */
+  map: Float32Array;
+  /** Mean per-frame path cost — near 0 when the takes really are the same part. */
+  cost: number;
+}
+
+/**
+ * @param radius - Band half-width in frames; the largest shift the path may use.
+ */
+export async function alignFeatureTracks(
+  guide: FeatureTrack,
+  dub: FeatureTrack,
+  radius: number,
+  progress: DtwProgress = {},
+): Promise<DtwResult> {
+  const n = guide.frameCount;
+  const m = dub.frameCount;
+  if (n < 4 || m < 4) throw new Error("Selection is too short to align.");
+
+  const slope = (m - 1) / (n - 1);
+
+  // Row geometry up front: `lo[i]` is the first dub frame row i considers and
+  // `offset[i]` where that row starts in the flat cost array.
+  const lo = new Int32Array(n);
+  const hi = new Int32Array(n);
+  const offset = new Int32Array(n + 1);
+  let cells = 0;
+  for (let i = 0; i < n; i++) {
+    const centre = i * slope;
+    lo[i] = Math.max(0, Math.floor(centre) - radius);
+    hi[i] = Math.min(m - 1, Math.ceil(centre) + radius);
+    offset[i] = cells;
+    cells += hi[i]! - lo[i]! + 1;
+  }
+  offset[n] = cells;
+
+  if (cells > MAX_CELLS) {
+    throw new Error(
+      "Selection is too long to align in one pass. Align a shorter range, or reduce Max shift.",
+    );
+  }
+
+  const guideData = guide.data;
+  const dubData = dub.data;
+
+  /** Cosine distance in [0, 2]; both sides are unit vectors. */
+  const distance = (i: number, j: number): number => {
+    const a = i * FEATURE_SIZE;
+    const b = j * FEATURE_SIZE;
+    let dot = 0;
+    for (let k = 0; k < FEATURE_SIZE; k++) dot += guideData[a + k]! * dubData[b + k]!;
+    return 1 - dot;
+  };
+
+  const local = new Float32Array(cells);
+  const total = new Float32Array(cells);
+  const step = new Uint8Array(cells);
+
+  for (let i = 0; i < n; i++) {
+    const start = offset[i]!;
+    for (let j = lo[i]!; j <= hi[i]!; j++) local[start + j - lo[i]!] = distance(i, j);
+  }
+
+  /** Accumulated cost at (i, j), or Infinity outside the band. */
+  const costAt = (i: number, j: number): number => {
+    if (i < 0 || j < 0 || j < lo[i]! || j > hi[i]!) return Infinity;
+    return total[offset[i]! + j - lo[i]!]!;
+  };
+  const localAt = (i: number, j: number): number => {
+    if (i < 0 || j < 0 || j < lo[i]! || j > hi[i]!) return Infinity;
+    return local[offset[i]! + j - lo[i]!]!;
+  };
+
+  total.fill(Infinity);
+  total[0] = local[0]!; // (0, 0) — both takes start together by construction
+
+  let lastReport = 0;
+  for (let i = 0; i < n; i++) {
+    const start = offset[i]!;
+    const rowLo = lo[i]!;
+
+    for (let j = rowLo; j <= hi[i]!; j++) {
+      if (i === 0 && j === 0) continue;
+      const here = local[start + j - rowLo]!;
+
+      const diagonal = costAt(i - 1, j - 1);
+      // The intermediate cell of a two-frame step is charged too, so a wide or
+      // tall step is never cheaper simply for visiting fewer cells.
+      const wide = costAt(i - 1, j - 2) + localAt(i, j - 1);
+      const tall = costAt(i - 2, j - 1) + localAt(i - 1, j);
+
+      let best = diagonal;
+      let choice = STEP_DIAGONAL;
+      if (wide < best) {
+        best = wide;
+        choice = STEP_WIDE;
+      }
+      if (tall < best) {
+        best = tall;
+        choice = STEP_TALL;
+      }
+
+      total[start + j - rowLo] = best + here;
+      step[start + j - rowLo] = choice;
+    }
+
+    if (progress.shouldAbort?.()) throw new Error("Cancelled.");
+    if (i - lastReport > 512) {
+      lastReport = i;
+      await progress.onProgress?.(i / n);
+    }
+  }
+
+  const endCost = costAt(n - 1, m - 1);
+  if (!Number.isFinite(endCost)) {
+    throw new Error("No alignment path fits within Max shift. Try raising it.");
+  }
+
+  // Walk the pointers back, recording the dub frames each guide frame saw.
+  const sum = new Float64Array(n);
+  const hits = new Int32Array(n);
+  let i = n - 1;
+  let j = m - 1;
+  let steps = 0;
+
+  while (i > 0 || j > 0) {
+    sum[i] = sum[i]! + j;
+    hits[i] = hits[i]! + 1;
+    steps++;
+
+    const choice = step[offset[i]! + j - lo[i]!]!;
+    if (choice === STEP_WIDE) {
+      // The skipped dub frame belongs to this guide frame as well.
+      sum[i] = sum[i]! + (j - 1);
+      hits[i] = hits[i]! + 1;
+      i -= 1;
+      j -= 2;
+    } else if (choice === STEP_TALL) {
+      sum[i - 1] = sum[i - 1]! + j;
+      hits[i - 1] = hits[i - 1]! + 1;
+      i -= 2;
+      j -= 1;
+    } else {
+      i -= 1;
+      j -= 1;
+    }
+    if (i < 0) i = 0;
+    if (j < 0) j = 0;
+  }
+  sum[0] = sum[0]! + j;
+  hits[0] = hits[0]! + 1;
+
+  const map = new Float32Array(n);
+  for (let k = 0; k < n; k++) {
+    map[k] = hits[k]! > 0 ? sum[k]! / hits[k]! : NaN;
+  }
+
+  // A tall step leaves its skipped guide frame unvisited; interpolate across.
+  for (let k = 0; k < n; k++) {
+    if (!Number.isNaN(map[k]!)) continue;
+    let before = k - 1;
+    while (before >= 0 && Number.isNaN(map[before]!)) before--;
+    let after = k + 1;
+    while (after < n && Number.isNaN(map[after]!)) after++;
+    if (before < 0 && after >= n) map[k] = k * slope;
+    else if (before < 0) map[k] = map[after]!;
+    else if (after >= n) map[k] = map[before]!;
+    else map[k] = map[before]! + ((map[after]! - map[before]!) * (k - before)) / (after - before);
+  }
+
+  map[0] = 0;
+  map[n - 1] = m - 1;
+
+  return { map, cost: endCost / Math.max(1, steps) };
+}

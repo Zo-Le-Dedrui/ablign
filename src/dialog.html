@@ -1,0 +1,749 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Ablign</title>
+    <style>
+      :root {
+        --ui-bg: hsl(0, 0%, 21%);
+        --panel-bg: hsl(0, 0%, 19%);
+        --control-bg: hsl(0, 0%, 16%);
+        --input-bg: hsl(0, 0%, 12%);
+        --text-primary: hsl(0, 0%, 78%);
+        --text-secondary: hsl(0, 0%, 48%);
+        --text-faint: hsl(0, 0%, 38%);
+        --border: hsl(0, 0%, 7%);
+        --hairline: hsl(0, 0%, 26%);
+        --accent: hsl(203, 89%, 66%);
+        --accent-strong: hsl(203, 89%, 73%);
+        --accent-dim: hsl(203, 48%, 40%);
+        --accent-glow: hsla(203, 89%, 66%, 0.35);
+        --on-accent: hsl(206, 45%, 10%);
+        --sink: inset 0 1px 2px hsla(0, 0%, 0%, 0.55);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+      }
+
+      body {
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        padding: 0;
+        background-color: var(--ui-bg);
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Cpath d='M0 0h1v1H0z' fill='%23fff' fill-opacity='.022'/%3E%3Cpath d='M2 2h1v1H2z' fill='%23000' fill-opacity='.05'/%3E%3C/svg%3E");
+        color: var(--text-primary);
+        font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 11px;
+        line-height: 1.45;
+        -webkit-font-smoothing: antialiased;
+        user-select: none;
+      }
+
+      header {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        align-items: baseline;
+        gap: 9px;
+        padding: 11px 14px 10px;
+        border-bottom: 1px solid var(--border);
+        background: linear-gradient(hsl(0, 0%, 22%), hsl(0, 0%, 18%));
+        box-shadow: 0 2px 7px hsla(0, 0%, 0%, 0.42), inset 0 1px 0 hsla(0, 0%, 100%, 0.05);
+      }
+
+      header h1 {
+        margin: 0;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.4px;
+      }
+
+      header span {
+        color: var(--text-faint);
+        font-variant-numeric: tabular-nums;
+      }
+
+      main {
+        flex: 1;
+        overflow-y: auto;
+        padding: 4px 14px 6px;
+      }
+
+      main::-webkit-scrollbar {
+        width: 9px;
+      }
+
+      main::-webkit-scrollbar-thumb {
+        background: hsl(0, 0%, 30%);
+        border: 2px solid var(--ui-bg);
+        border-radius: 5px;
+      }
+
+      main::-webkit-scrollbar-thumb:hover {
+        background: hsl(0, 0%, 38%);
+      }
+
+      section {
+        padding: 11px 0 4px;
+      }
+
+      section + section {
+        border-top: 1px solid var(--hairline);
+      }
+
+      h2 {
+        margin: 0 0 9px;
+        color: var(--text-faint);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.7px;
+        text-transform: uppercase;
+      }
+
+      .field {
+        display: grid;
+        grid-template-columns: 104px 1fr 50px;
+        align-items: center;
+        gap: 10px;
+        min-height: 22px;
+        padding: 1px 4px;
+        margin: 0 -4px;
+        border-radius: 3px;
+        transition: background 120ms ease;
+      }
+
+      .field:hover {
+        background: hsl(0, 0%, 23%);
+      }
+
+      .field.wide {
+        grid-template-columns: 104px 1fr;
+      }
+
+      .field.top {
+        align-items: start;
+      }
+
+      .field.top .name {
+        padding-top: 4px;
+      }
+
+      .name {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        color: var(--text-secondary);
+      }
+
+      .field:hover .name {
+        color: var(--text-primary);
+      }
+
+      .help {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 13px;
+        height: 13px;
+        padding: 0;
+        background: transparent;
+        color: var(--text-faint);
+        border: 1px solid var(--text-faint);
+        border-radius: 50%;
+        font: inherit;
+        font-size: 9px;
+        line-height: 1;
+        cursor: pointer;
+        transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+      }
+
+      .help:hover {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+
+      .help.on {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--on-accent);
+      }
+
+      .explain {
+        max-height: 0;
+        margin: 0 -4px;
+        opacity: 0;
+        overflow: hidden;
+        transition: max-height 200ms ease, opacity 160ms ease, margin 200ms ease;
+      }
+
+      .explain.open {
+        max-height: 220px;
+        margin: 2px -4px 6px;
+        opacity: 1;
+      }
+
+      .explain p {
+        margin: 0;
+        padding: 7px 9px;
+        color: var(--text-secondary);
+        background: var(--input-bg);
+        border-left: 2px solid var(--accent-dim);
+        border-radius: 0 3px 3px 0;
+      }
+
+      output {
+        text-align: right;
+        color: var(--text-primary);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .select {
+        position: relative;
+        display: block;
+      }
+
+      .select::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: 8px;
+        width: 0;
+        height: 0;
+        margin-top: -1px;
+        border-left: 3.5px solid transparent;
+        border-right: 3.5px solid transparent;
+        border-top: 4px solid var(--text-secondary);
+        pointer-events: none;
+      }
+
+      select {
+        width: 100%;
+        padding: 4px 20px 4px 6px;
+        background: linear-gradient(hsl(0, 0%, 10%), hsl(0, 0%, 14%));
+        color: var(--text-primary);
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        box-shadow: var(--sink);
+        font: inherit;
+        appearance: none;
+        -webkit-appearance: none;
+        cursor: pointer;
+        transition: border-color 120ms ease;
+      }
+
+      select:hover {
+        border-color: hsl(0, 0%, 34%);
+      }
+
+      select:focus {
+        outline: none;
+        border-color: var(--accent-dim);
+        box-shadow: var(--sink), 0 0 0 2px var(--accent-glow);
+      }
+
+      input[type="range"] {
+        width: 100%;
+        height: 15px;
+        margin: 0;
+        background: transparent;
+        appearance: none;
+        -webkit-appearance: none;
+        cursor: pointer;
+      }
+
+      input[type="range"]::-webkit-slider-runnable-track {
+        height: 4px;
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        box-shadow: var(--sink);
+        background: linear-gradient(
+          to right,
+          var(--accent) 0 var(--fill, 0%),
+          var(--input-bg) var(--fill, 0%) 100%
+        );
+      }
+
+      input[type="range"]::-webkit-slider-thumb {
+        appearance: none;
+        -webkit-appearance: none;
+        width: 9px;
+        height: 14px;
+        margin-top: -6px;
+        background: linear-gradient(hsl(0, 0%, 88%), hsl(0, 0%, 71%));
+        border: none;
+        border-radius: 2px;
+        box-shadow: 0 1px 3px hsla(0, 0%, 0%, 0.6), inset 0 1px 0 hsla(0, 0%, 100%, 0.5);
+        transition: background 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+      }
+
+      input[type="range"]:hover::-webkit-slider-thumb {
+        background: hsl(0, 0%, 94%);
+      }
+
+      input[type="range"]:active::-webkit-slider-thumb {
+        background: linear-gradient(var(--accent-strong), var(--accent));
+        transform: scaleY(1.1);
+        box-shadow: 0 1px 4px hsla(0, 0%, 0%, 0.65), 0 0 0 3px var(--accent-glow);
+      }
+
+      input[type="range"]:focus {
+        outline: none;
+      }
+
+      input[type="range"]:focus::-webkit-slider-thumb {
+        background: var(--accent);
+      }
+
+      .checklist {
+        max-height: 92px;
+        overflow-y: auto;
+        padding: 3px;
+        background: linear-gradient(hsl(0, 0%, 10%), hsl(0, 0%, 13%));
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        box-shadow: var(--sink);
+      }
+
+      .checklist::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      .checklist::-webkit-scrollbar-thumb {
+        background: hsl(0, 0%, 28%);
+        border: 2px solid var(--input-bg);
+        border-radius: 4px;
+      }
+
+      .checklist label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 4px;
+        border-radius: 2px;
+        color: var(--text-primary);
+        cursor: pointer;
+        transition: background 100ms ease;
+      }
+
+      .checklist label:hover {
+        background: hsl(0, 0%, 18%);
+      }
+
+      .checklist label.disabled {
+        color: var(--text-faint);
+        cursor: default;
+      }
+
+      .checklist label.disabled:hover {
+        background: transparent;
+      }
+
+      .checklist input {
+        width: 11px;
+        height: 11px;
+        margin: 0;
+        accent-color: var(--accent);
+        cursor: pointer;
+      }
+
+      .chips {
+        display: flex;
+        gap: 4px;
+        margin-top: 5px;
+      }
+
+      .chips button {
+        min-width: 0;
+        padding: 2px 8px;
+        background: var(--control-bg);
+        color: var(--text-secondary);
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        font: inherit;
+        font-size: 10px;
+        cursor: pointer;
+        transition: color 120ms ease, border-color 120ms ease;
+      }
+
+      .chips button:hover {
+        color: var(--text-primary);
+        border-color: hsl(0, 0%, 34%);
+      }
+
+      #warning {
+        min-height: 15px;
+        padding-top: 3px;
+        color: var(--accent);
+      }
+
+      p.note {
+        margin: 5px 0 2px;
+        color: var(--text-faint);
+      }
+
+      footer {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        justify-content: flex-end;
+        gap: 7px;
+        padding: 10px 14px;
+        border-top: 1px solid var(--border);
+        background: linear-gradient(hsl(0, 0%, 21%), hsl(0, 0%, 17%));
+        box-shadow: 0 -2px 7px hsla(0, 0%, 0%, 0.42), inset 0 1px 0 hsla(0, 0%, 100%, 0.05);
+      }
+
+      footer button {
+        min-width: 76px;
+        padding: 5px 12px;
+        background: var(--control-bg);
+        color: var(--text-primary);
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        font: inherit;
+        cursor: pointer;
+        transition: background 120ms ease, border-color 120ms ease, transform 60ms ease;
+      }
+
+      footer button:hover {
+        background: hsl(0, 0%, 22%);
+        border-color: hsl(0, 0%, 34%);
+      }
+
+      footer button:active {
+        transform: translateY(1px);
+      }
+
+      footer button {
+        box-shadow: 0 1px 2px hsla(0, 0%, 0%, 0.4), inset 0 1px 0 hsla(0, 0%, 100%, 0.06);
+      }
+
+      footer button.primary {
+        background: linear-gradient(var(--accent-strong), var(--accent));
+        color: var(--on-accent);
+        border-color: var(--accent-dim);
+        font-weight: 600;
+        box-shadow: 0 1px 4px hsla(0, 0%, 0%, 0.45), 0 0 11px var(--accent-glow),
+          inset 0 1px 0 hsla(0, 0%, 100%, 0.35);
+      }
+
+      footer button.primary:hover {
+        background: linear-gradient(hsl(203, 92%, 79%), var(--accent-strong));
+        border-color: var(--accent);
+      }
+
+      footer button:disabled {
+        opacity: 0.35;
+        cursor: default;
+        transform: none;
+      }
+
+      footer button:disabled:hover {
+        background: linear-gradient(var(--accent-strong), var(--accent));
+        border-color: var(--accent-dim);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Ablign</h1>
+      <span id="subtitle"></span>
+    </header>
+
+    <main>
+      <div id="message" hidden><p class="note" id="message-text"></p></div>
+
+      <div id="settings" hidden>
+        <section>
+          <h2>Takes</h2>
+
+          <div class="field wide">
+            <span class="name">
+              <label for="guide">Guide</label>
+              <button type="button" class="help" data-help="guide" aria-label="What Guide means">?</button>
+            </span>
+            <span class="select"><select id="guide"></select></span>
+          </div>
+          <div class="explain" data-for="guide">
+            <p>The take everything else lines up with — usually your lead vocal. It is never moved.</p>
+          </div>
+
+          <div class="field wide top">
+            <span class="name">
+              <label>Doubles</label>
+              <button type="button" class="help" data-help="dubs" aria-label="What Doubles means">?</button>
+            </span>
+            <span>
+              <div class="checklist" id="dubs"></div>
+              <span class="chips">
+                <button type="button" id="all">All</button>
+                <button type="button" id="none">None</button>
+              </span>
+            </span>
+          </div>
+          <div class="explain" data-for="dubs">
+            <p>The takes that get moved onto the guide. Tick as many as you like — a backing pair, left and right, goes through in one pass.</p>
+          </div>
+
+          <div id="warning"></div>
+        </section>
+
+        <section>
+          <h2>Alignment</h2>
+
+          <div class="field">
+            <span class="name">
+              <label for="strength">Strength</label>
+              <button type="button" class="help" data-help="strength" aria-label="What Strength does">?</button>
+            </span>
+            <input type="range" id="strength" min="0" max="100" step="1" />
+            <output id="strength-value"></output>
+          </div>
+          <div class="explain" data-for="strength">
+            <p>How much of the measured correction to apply. At 100% the take sits exactly on the guide. Lower it to leave the take deliberately loose, so two voices still sound like two people rather than one thick one. 0% changes nothing.</p>
+          </div>
+
+          <div class="field">
+            <span class="name">
+              <label for="maxShift">Max shift</label>
+              <button type="button" class="help" data-help="maxShift" aria-label="What Max shift does">?</button>
+            </span>
+            <input type="range" id="maxShift" min="20" max="1000" step="10" />
+            <output id="maxShift-value"></output>
+          </div>
+          <div class="explain" data-for="maxShift">
+            <p>How far Ablign may look when hunting for a word. Too small and it cannot reach a take that drags badly; too large and it risks locking onto a similar-sounding word further away.</p>
+          </div>
+
+          <div class="field">
+            <span class="name">
+              <label for="smoothing">Smoothing</label>
+              <button type="button" class="help" data-help="smoothing" aria-label="What Smoothing does">?</button>
+            </span>
+            <input type="range" id="smoothing" min="0" max="300" step="5" />
+            <output id="smoothing-value"></output>
+          </div>
+          <div class="explain" data-for="smoothing">
+            <p>Steadies the correction. Inside a held vowel every instant looks alike, so the raw match jitters — this removes the jitter, not the correction. Less is not tighter: at 5 ms the result lands ten times further from the guide than at 60 ms.</p>
+          </div>
+
+          <div class="field">
+            <span class="name">
+              <label for="maxStretch">Max stretch</label>
+              <button type="button" class="help" data-help="maxStretch" aria-label="What Max stretch does">?</button>
+            </span>
+            <input type="range" id="maxStretch" min="5" max="200" step="5" />
+            <output id="maxStretch-value"></output>
+          </div>
+          <div class="explain" data-for="maxStretch">
+            <p>How hard the gap between two words may be stretched or squeezed. A correction needing more than this comes out only partly applied. Lower it if a take warbles where it had to stretch a long way.</p>
+          </div>
+
+          <div class="field">
+            <span class="name">
+              <label for="gate">Silence</label>
+              <button type="button" class="help" data-help="gate" aria-label="What Silence does">?</button>
+            </span>
+            <input type="range" id="gate" min="-80" max="-20" step="1" />
+            <output id="gate-value"></output>
+          </div>
+          <div class="explain" data-for="gate">
+            <p>Breath, room tone and headphone bleed sit below this level and get ignored. Raise it for a noisy take, lower it for a very quiet one.</p>
+          </div>
+        </section>
+
+        <section>
+          <h2>Result</h2>
+
+          <div class="field wide">
+            <span class="name">
+              <label for="destination">Put it</label>
+              <button type="button" class="help" data-help="destination" aria-label="What Put it does">?</button>
+            </span>
+            <span class="select">
+              <select id="destination">
+                <option value="replace">Replace, original to a take lane</option>
+                <option value="track">On a new audio track</option>
+                <option value="take">On a new take lane</option>
+              </select>
+            </span>
+          </div>
+          <div class="explain" data-for="destination">
+            <p>Where the aligned takes land. Replace puts the aligned version on the track, and Live keeps the take it displaced on a take lane underneath, so you can flip between the two. A new track plays straight away and deactivates the take it stands in for over the selected range — a longer clip is split first, so whatever lies outside carries on playing, and reactivating the clip in Live brings the original back. A take lane keeps the original playing and parks the aligned version below, silent until you swap the lane in.</p>
+          </div>
+
+          <p class="note" id="destination-note"></p>
+        </section>
+      </div>
+    </main>
+
+    <footer>
+      <button id="cancel">Cancel</button>
+      <button id="apply" class="primary">Align</button>
+    </footer>
+
+    <script>
+      const payload = "__ABLIGN_PAYLOAD__";
+
+      const webKitHandler =
+        window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.live;
+      const webView2 = window.chrome && window.chrome.webview;
+
+      function closeWithResult(result) {
+        const message = { method: "close_and_send", params: [JSON.stringify(result)] };
+        if (webKitHandler) window.webkit.messageHandlers.live.postMessage(message);
+        else if (webView2) window.chrome.webview.postMessage(message);
+      }
+
+      const applyButton = document.getElementById("apply");
+      const cancelButton = document.getElementById("cancel");
+
+      if (payload.mode === "message") {
+        document.getElementById("message").hidden = false;
+        document.getElementById("message-text").textContent = payload.message;
+        applyButton.hidden = true;
+        cancelButton.textContent = "Close";
+      } else {
+        document.getElementById("settings").hidden = false;
+        document.getElementById("subtitle").textContent = payload.range;
+
+        // One "?" at a time, so the panel never grows into a wall of text.
+        const explanations = document.querySelectorAll(".explain");
+        for (const button of document.querySelectorAll(".help")) {
+          button.addEventListener("click", () => {
+            const target = button.dataset.help;
+            const wasOpen = button.classList.contains("on");
+            for (const other of document.querySelectorAll(".help")) other.classList.remove("on");
+            for (const panel of explanations) panel.classList.remove("open");
+            if (!wasOpen) {
+              button.classList.add("on");
+              document.querySelector('.explain[data-for="' + target + '"]').classList.add("open");
+            }
+          });
+        }
+
+        const guideSelect = document.getElementById("guide");
+        const dubList = document.getElementById("dubs");
+        const boxes = [];
+
+        payload.tracks.forEach((name, index) => {
+          const option = document.createElement("option");
+          option.value = String(index);
+          option.textContent = name;
+          guideSelect.appendChild(option);
+
+          const row = document.createElement("label");
+          const box = document.createElement("input");
+          box.type = "checkbox";
+          box.value = String(index);
+          box.checked = true;
+          const text = document.createElement("span");
+          text.textContent = name;
+          row.appendChild(box);
+          row.appendChild(text);
+          dubList.appendChild(row);
+          boxes.push({ box, row });
+        });
+        guideSelect.value = "0";
+
+        const warning = document.getElementById("warning");
+
+        // The guide cannot also be one of the doubles, so its own box is held
+        // off rather than merely ignored later.
+        function validate() {
+          const guide = Number(guideSelect.value);
+          let chosen = 0;
+          boxes.forEach(({ box, row }, index) => {
+            const isGuide = index === guide;
+            if (isGuide) box.checked = false;
+            box.disabled = isGuide;
+            row.classList.toggle("disabled", isGuide);
+            if (box.checked) chosen++;
+          });
+          warning.textContent = chosen ? "" : "Tick at least one double.";
+          applyButton.disabled = chosen === 0;
+          applyButton.textContent = chosen > 1 ? "Align " + chosen + " tracks" : "Align";
+        }
+
+        guideSelect.addEventListener("change", validate);
+        for (const { box } of boxes) box.addEventListener("change", validate);
+        document.getElementById("all").addEventListener("click", () => {
+          for (const { box } of boxes) if (!box.disabled) box.checked = true;
+          validate();
+        });
+        document.getElementById("none").addEventListener("click", () => {
+          for (const { box } of boxes) box.checked = false;
+          validate();
+        });
+
+        const notes = {
+          replace: "The take it displaces goes to a lane below — moved by Live, or rebuilt by Ablign if Live does not. Undo restores the exact one.",
+          track: "One new track per double. The take it stands in for is deactivated over the selection only — a longer clip is split first, so the rest keeps playing.",
+          take: "Take lanes do not play until you swap the lane in.",
+        };
+        const destination = document.getElementById("destination");
+        const destinationNote = document.getElementById("destination-note");
+        function describe() {
+          destinationNote.textContent = notes[destination.value];
+        }
+        destination.addEventListener("change", describe);
+        describe();
+
+        const sliders = [
+          ["strength", (v) => v + " %"],
+          ["maxShift", (v) => v + " ms"],
+          ["smoothing", (v) => (Number(v) === 0 ? "off" : v + " ms")],
+          ["maxStretch", (v) => "±" + v + " %"],
+          ["gate", (v) => v + " dB"],
+        ];
+        for (const [id, format] of sliders) {
+          const input = document.getElementById(id);
+          const readout = document.getElementById(id + "-value");
+          input.value = String(payload.settings[id]);
+          const show = () => {
+            readout.textContent = format(input.value);
+            // Paint the track up to the thumb so the slider reads at a glance.
+            const span = Number(input.max) - Number(input.min);
+            const at = ((Number(input.value) - Number(input.min)) / span) * 100;
+            input.style.setProperty("--fill", at + "%");
+          };
+          input.addEventListener("input", show);
+          show();
+        }
+
+        validate();
+
+        applyButton.addEventListener("click", () => {
+          closeWithResult({
+            apply: true,
+            guide: Number(guideSelect.value),
+            dubs: boxes
+              .filter(({ box }) => box.checked)
+              .map(({ box }) => Number(box.value)),
+            destination: destination.value,
+            strength: Number(document.getElementById("strength").value),
+            maxShiftMs: Number(document.getElementById("maxShift").value),
+            smoothingMs: Number(document.getElementById("smoothing").value),
+            maxStretchPercent: Number(document.getElementById("maxStretch").value),
+            gateDb: Number(document.getElementById("gate").value),
+          });
+        });
+      }
+
+      cancelButton.addEventListener("click", () => closeWithResult({ apply: false }));
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeWithResult({ apply: false });
+        if (event.key === "Enter" && !applyButton.disabled && !applyButton.hidden) {
+          applyButton.click();
+        }
+      });
+    </script>
+  </body>
+</html>

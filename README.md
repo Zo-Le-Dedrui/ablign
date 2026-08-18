@@ -106,7 +106,7 @@ Live 12 Suite on the **beta channel** — 12.4.5 or later, the build that ships 
 
 ## Install
 
-Download [**ablign-1.0.0.ablx**](https://github.com/Zo-Le-Dedrui/ablign/raw/main/ablign-1.0.0.ablx) and drop it onto Live. That is the whole install — no build step, nothing else to fetch.
+Download the `.ablx` from the [latest release](../../releases/latest) and drop it onto Live. That is the whole install — no build step, nothing else to fetch.
 
 ## Building it yourself
 

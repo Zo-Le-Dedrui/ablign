@@ -18,6 +18,14 @@ import { FEATURE_SIZE, type FeatureTrack } from "./features.js";
 /** Refuse rather than ask Live for a gigabyte. Roughly 10 min at ±300 ms. */
 const MAX_CELLS = 48_000_000;
 
+/**
+ * Loudness below which a double's frame carries no usable evidence.
+ *
+ * `loudness` is already gated: it reaches 0 at the Silence setting and rises
+ * over the 40 dB above it, so this is a little over 4 dB into that range.
+ */
+const SILENT_BELOW = 0.1;
+
 const STEP_DIAGONAL = 0;
 const STEP_WIDE = 1; // (i-1, j-2): the dub covers two frames while the guide covers one
 const STEP_TALL = 2; // (i-2, j-1): the guide covers two frames while the dub covers one
@@ -152,9 +160,39 @@ export async function alignFeatureTracks(
   scale = scaleCells > 0 ? Math.max(0, scale / scaleCells) : 0;
   const paceChange = Math.max(0, inertia) * scale;
 
+  /**
+   * Where the double is silent, every column costs the same.
+   *
+   * A backing part does not sing every word the lead sings. On the real take
+   * that prompted this, four of the lead's thirteen syllables had no
+   * counterpart within 900 ms — the double simply is not there. The matcher
+   * still has to map those frames somewhere, and the "quiet" axis in the
+   * feature vector makes silence look actively wrong under a loud lead, so it
+   * reaches for whatever material is nearest and drags the path off the
+   * syllables that *did* have a counterpart.
+   *
+   * Giving those columns a flat cost lets the path coast through instead. It
+   * has no reason to prefer any of them, so the step pattern and the anchored
+   * material either side decide, which is the only honest answer available:
+   * there is nothing there to align to.
+   *
+   * The flat value is the band's own mean, so coasting is neither cheaper nor
+   * dearer than matching — the path is not pushed into silence or away from it.
+   *
+   * Only when the silence is one-sided. Where both takes are quiet the silence
+   * is real evidence and the quiet axis matches it correctly; flattening that
+   * too was tried and cost the main bench 2.1 ms of mean lag against 12.8.
+   */
+  const dubLoudness = dub.loudness;
+  const guideLoudness = guide.loudness;
+
   for (let i = 0; i < n; i++) {
     const start = offset[i]!;
-    for (let j = lo[i]!; j <= hi[i]!; j++) local[start + j - lo[i]!] = distance(i, j);
+    const leadIsSinging = guideLoudness[i]! >= SILENT_BELOW;
+    for (let j = lo[i]!; j <= hi[i]!; j++) {
+      const oneSided = leadIsSinging && dubLoudness[j]! < SILENT_BELOW;
+      local[start + j - lo[i]!] = oneSided ? scale : distance(i, j);
+    }
   }
 
   /** Accumulated cost at (i, j), or Infinity outside the band. */

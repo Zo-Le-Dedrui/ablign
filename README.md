@@ -46,6 +46,16 @@ This is safe for the result: a track's mute sits downstream of its device chain,
 
 Every control has a **?** next to it in the dialog that says what it does and which way to move it.
 
+### When the double does not sing every word
+
+A backing part often emphasises some words and leaves others alone. On the real take this was diagnosed from, four of the lead's thirteen syllables had no counterpart in the double within 900 ms — the double simply is not there.
+
+The matcher still has to map those frames somewhere, and the quiet axis in the feature vector makes silence look actively wrong under a loud lead, so it reaches for whatever material is nearest and drags the path off the syllables that *did* have a counterpart. Where the lead sings and the double is silent, every column now costs the same, so the path coasts through instead of being pulled. Only when the silence is one-sided: where both takes are quiet the silence is real evidence, and flattening that too cost the synthetic bench 2.1 ms of mean lag against 12.8.
+
+Measured on that take, over the nine syllables that do have counterparts, the result stops depending on the Max shift setting: 17 to 25 ms across 100, 200 and 300 ms against 16 to 37 before, and at most one syllable past 60 ms instead of two. It is one real example, so treat the numbers as a direction rather than a specification.
+
+What no alignment can do is put a word where the double never sang one. Those four syllables stay silent in the result, and that is correct.
+
 ### When a syllable lands on the wrong word
 
 Narrow **Max shift**. A wide setting is not the cautious choice: it is the licence for the matcher to reach two syllables away and take the wrong one, and the cost of doing so is small because a short syllable contributes few frames to the path.

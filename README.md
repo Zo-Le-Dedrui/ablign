@@ -74,7 +74,9 @@ Sibilants are also left at their own length rather than stretched. Two takes of 
 
 That costs a little accuracy on the synthetic bench — mean waveform lag goes from 1.9 ms to 3.6 ms — because its syllables are noisy along their whole length and so are partly protected. Real speech is sibilant for a much smaller share of its duration.
 
-`npm run check` runs six suites. `tools/align-check.ts` synthesises a guide take of twelve syllables and doubles that drift in known ways, then measures where the syllables actually landed:
+A phrase that starts cold — silence, then a hit — lands its opening attack exactly rather than approximately. In the silence before it every offset matches every other, so the matcher's path there is arbitrary, and the curve used to approach the first attack through an average of that. It now ramps from zero through the leading and trailing quiet straight to the first audible frame: the silence is where a correction is free, since nothing plays there. Cold-start attacks measure 2.8 ms instead of 7.0 ms, and a uniformly early double is corrected fully instead of partially; `tools/attack-check.ts` guards both.
+
+`npm run check` runs seven suites. `tools/align-check.ts` synthesises a guide take of twelve syllables and doubles that drift in known ways, then measures where the syllables actually landed:
 
 | Check | Result |
 |---|---|

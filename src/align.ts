@@ -143,8 +143,17 @@ export async function alignAgainst(
     ...(hooks.shouldAbort ? { shouldAbort: hooks.shouldAbort } : {}),
   });
 
+  // Audibility along the path: what the output plays at guide frame i is the
+  // dub's material at map[i], so that is the loudness that anchors the curve.
+  const anchor = new Float32Array(map.length);
+  for (let i = 0; i < map.length; i++) {
+    const at = Math.min(dubFeatures.frameCount - 1, Math.max(0, Math.round(map[i]!)));
+    anchor[i] = dubFeatures.loudness[at]!;
+  }
+
   const curve = shapeWarpCurve(map, {
     resist: sibilantRuns(dubFeatures, map),
+    anchor,
     strength: Math.min(1, Math.max(0, settings.strength / 100)),
     smoothingFrames: Math.max(
       0,

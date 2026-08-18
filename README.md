@@ -37,7 +37,7 @@ This is safe for the result: a track's mute sits downstream of its device chain,
 | Control | Default | What it does |
 |---|---|---|
 | **Strength** | 100 % | How much of the measured correction to apply. 0 % is an exact bypass. |
-| **Max shift** | 300 ms | The furthest a double may be moved. Also the DTW band, so raising it costs time and memory. |
+| **Max shift** | 200 ms | The furthest a double may be moved, and the first control to reach for when a syllable lands on the wrong word. Also the DTW band, so raising it costs time and memory. |
 | **Smoothing** | 60 ms | Averaging on the warp curve. The raw path jitters inside held vowels where many alignments cost nearly the same; too little smoothing is worse than too much (5 ms measures 17 ms of residual lag, 60 ms measures 1.7 ms). |
 | **Max stretch** | ±100 % | Local time-stretch limit. **This is the tightness control.** The matcher's own step pattern already caps the path slope at 2x, so 100 and above leave the limit inert; below that it only ever tightens. |
 | **Hold** | off | How strongly a take already in place resists being moved. Off is the most accurate reading when the takes give the matcher something to go on, and the most erratic when they do not. |
@@ -45,6 +45,12 @@ This is safe for the result: a track's mute sits downstream of its device chain,
 | **Put it** | Replace, original to a take lane | The aligned take lands on the track, and Live keeps the one it displaced on a take lane below. Also: a new audio track, or a new take lane. |
 
 Every control has a **?** next to it in the dialog that says what it does and which way to move it.
+
+### When a syllable lands on the wrong word
+
+Narrow **Max shift**. A wide setting is not the cautious choice: it is the licence for the matcher to reach two syllables away and take the wrong one, and the cost of doing so is small because a short syllable contributes few frames to the path.
+
+This was diagnosed from a session log rather than from a bench. Every run reported a peak shift of 292 to 321 ms against the 300 ms limit — the alignment pinned against its own band, moving the take as far as it was allowed and no further. Raising the limit to 800 ms made it worse; dropping it to 100 ms fixed it. The default is now 200 ms, which measures identical to 300 on every bench here while halving the room to go astray, and a correction that wanted more says CLIPPED in the log.
 
 ### When the double is already tight
 

@@ -47,7 +47,12 @@ export interface AlignSettings {
 
 export const DEFAULT_SETTINGS: AlignSettings = {
   strength: 100,
-  maxShiftMs: 300,
+  // 300 was a guess and too permissive: given that much room the matcher will
+  // reach two syllables away and take the wrong one, which is the wrong-word
+  // failure. Reported from a session as 300 wrong, 100 right. 200 measures
+  // identical to 300 on every bench here and halves the room to go astray;
+  // anything that genuinely needs more says CLIPPED in the log.
+  maxShiftMs: 200,
   smoothingMs: 60,
   // Anything below 100 fights the matcher rather than guiding it: at 40 the
   // limiter spends its budget flattening corrections the path had right, and

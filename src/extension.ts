@@ -408,7 +408,10 @@ async function place(
 export function activate(activation: ActivationContext) {
   const context = initialize(activation, "1.0.0");
 
-  const run = async (selection: ArrangementSelection): Promise<void> => {
+  const run = async (
+    selection: ArrangementSelection,
+    progress: { stage: string },
+  ): Promise<void> => {
     const from = selection.time_selection_start;
     const to = selection.time_selection_end;
 
@@ -489,6 +492,7 @@ export function activate(activation: ActivationContext) {
         try {
           playback.engage();
 
+          progress.stage = `rendering the guide, ${guideName}`;
           await update(`Rendering ${guideName}`, 1);
           let guideAudio = await renderTrack(context, guideTrack, from, to);
 
@@ -514,6 +518,7 @@ export function activate(activation: ActivationContext) {
             const counter = doubles.length > 1 ? ` (${position + 1}/${doubles.length})` : "";
             const base = 3 + position * share;
 
+            progress.stage = `rendering ${dubName}`;
             await update(`Rendering ${dubName}${counter}`, base);
             // Placing the previous result may have added a track; it starts
             // unmuted and would be heard during this render.
@@ -525,6 +530,7 @@ export function activate(activation: ActivationContext) {
             }
             if (abortSignal.aborted) return;
 
+            progress.stage = `aligning ${dubName}`;
             const result = await alignAgainst(guide, dubAudio, settings, {
               onStage: (text, fraction) =>
                 update(`${text} ${dubName}${counter}`, base + share * (0.15 + fraction * 0.75)),
@@ -532,6 +538,7 @@ export function activate(activation: ActivationContext) {
             });
             if (abortSignal.aborted) return;
 
+            progress.stage = `placing ${dubName}`;
             await update(`Placing ${dubName}${counter}`, base + share * 0.95);
             const imported = await importResult(context, result);
             const report = await place(
@@ -551,6 +558,10 @@ export function activate(activation: ActivationContext) {
               `[Ablign] ${dubName} -> ${guideName}: peak shift ${result.peakShiftMs.toFixed(0)} ms, path cost ${result.cost.toFixed(3)}`,
             );
           }
+
+          // Every double is on the timeline from here. Whatever fails after
+          // this is clean-up, not work anyone lost.
+          progress.stage = "finished";
         } finally {
           // Cancelling and failing both land here; leaving a Set full of muted
           // tracks would be a far worse bug than the noise this avoids.
@@ -581,15 +592,23 @@ export function activate(activation: ActivationContext) {
   };
 
   context.commands.registerCommand(COMMAND, (arg: unknown) => {
-    void run(arg as ArrangementSelection).catch((error: unknown) => {
+    const progress = { stage: "starting" };
+
+    void run(arg as ArrangementSelection, progress).catch((error: unknown) => {
       const message = describeError(error);
       if (message === "Cancelled." || (error instanceof Error && error.message === "Cancelled.")) {
         return;
       }
-      console.error(`[Ablign] ${message}`);
+
+      console.error(`[Ablign] failed at "${progress.stage}": ${message}`);
       console.error("[Ablign] raw error:", error);
       if (error instanceof Error && error.stack) console.error(error.stack);
-      void showMessage(context, message);
+
+      // Once the takes are placed, what remains is closing a dialog and putting
+      // mutes back. Live has been seen to reject that with nothing at all, and
+      // alarming someone whose work completed is worse than the failure being
+      // described. The log still keeps it.
+      if (progress.stage !== "finished") void showMessage(context, message);
     });
   });
 

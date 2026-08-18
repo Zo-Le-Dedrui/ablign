@@ -136,30 +136,43 @@ function sibilant(seconds: number, seed: number): Float32Array {
 }
 
 /**
- * How periodic a signal is, 0 to 1, from the strongest normalised
- * autocorrelation peak between 1 and 25 ms.
+ * Spectral flatness of the top of the band, 0 to 1.
  *
- * Noise scores near zero. WSOLA's whole method is to choose each grain for how
- * well it continues the last one, and on material with no periodicity to find
- * it imposes one anyway — the grain spacing itself. That reads as a peak here,
- * and as a metallic ring in the ear.
+ * Noise reads near 1, anything tonal falls towards 0. This is the measure that
+ * matches the complaint: stretching by r reuses material at a fixed offset of
+ * about hop x (1 - 1/r), which is a comb — 293 samples at +40 %, a tone near
+ * 150 Hz. A peak-of-autocorrelation measure cannot tell that apart from noise
+ * spread over many lags, and the difference is the whole artefact: one whistles,
+ * the other does not.
  */
-function periodicity(signal: Float32Array): number {
-  const from = Math.floor(signal.length / 2) - 16384;
-  const window = 32768;
-  let energy = 0;
-  for (let i = 0; i < window; i++) energy += (signal[from + i] ?? 0) ** 2;
-  if (energy <= 0) return 0;
+function flatness(signal: Float32Array): number {
+  const size = 16384;
+  const from = Math.max(0, Math.floor(signal.length / 2) - size / 2);
+  const fft = new Fft(size);
+  const re = new Float64Array(size);
+  const im = new Float64Array(size);
 
-  let best = 0;
-  for (let lag = Math.round(SAMPLE_RATE * 0.001); lag <= Math.round(SAMPLE_RATE * 0.025); lag++) {
-    let dot = 0;
-    for (let i = 0; i < window; i += 2) {
-      dot += (signal[from + i] ?? 0) * (signal[from + i + lag] ?? 0);
-    }
-    best = Math.max(best, (dot * 2) / energy);
+  for (let i = 0; i < size; i++) {
+    re[i] = (signal[from + i] ?? 0) * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / size));
+    im[i] = 0;
   }
-  return best;
+  fft.forward(re, im);
+
+  // Only where a sibilant actually lives, so the measure is not dominated by
+  // bins that hold nothing either way.
+  const lowBin = Math.round((2000 * size) / SAMPLE_RATE);
+  const highBin = Math.round((12000 * size) / SAMPLE_RATE);
+
+  let logSum = 0;
+  let sum = 0;
+  let count = 0;
+  for (let b = lowBin; b < highBin; b++) {
+    const power = re[b]! * re[b]! + im[b]! * im[b]! + 1e-18;
+    logSum += Math.log(power);
+    sum += power;
+    count++;
+  }
+  return Math.exp(logSum / count) / (sum / count);
 }
 
 async function stretch(signal: Float32Array, ratio: number): Promise<Float32Array> {
@@ -188,6 +201,7 @@ console.log("\noff-harmonic energy, lower is cleaner\n");
 console.log("  case                    source     stretched     cost");
 console.log("  " + "-".repeat(56));
 
+const failures: string[] = [];
 let total = 0;
 let counted = 0;
 for (const [label, f0, jitter, ratio] of cases) {
@@ -226,13 +240,21 @@ for (const [label, ratio] of [
   let afterSum = 0;
   for (const seed of SEEDS) {
     const source = sibilant(2.5, seed);
-    beforeSum += periodicity(source);
-    afterSum += periodicity(await stretch(source, ratio));
+    beforeSum += flatness(source);
+    afterSum += flatness(await stretch(source, ratio));
   }
   const before = beforeSum / SEEDS.length;
   const after = afterSum / SEEDS.length;
+  const drop = ((after - before) / before) * 100;
+  // The bias-free search on noise measured -0.4 % and -3.3 %. Anything much
+  // past that means the centre bias has crept back onto unvoiced material and
+  // the comb with it.
+  const allowed = ratio > 1.2 ? -4.5 : -1.5;
+  if (drop < allowed) {
+    failures.push(`${label}: flatness ${drop.toFixed(1)} %, allowed ${allowed} %`);
+  }
   console.log(
-    `  ${label.padEnd(22)} ${before.toFixed(3).padStart(6)}    ${after.toFixed(3).padStart(9)}    ${(after - before >= 0 ? "+" : "") + (after - before).toFixed(3)}`,
+    `  ${label.padEnd(22)} ${before.toFixed(3).padStart(6)}    ${after.toFixed(3).padStart(9)}    ${(drop >= 0 ? "+" : "") + drop.toFixed(1)} %`,
   );
 }
 console.log();
@@ -323,8 +345,20 @@ for (const [label, ratio] of [
     heightSum += before.peak > 0 ? after.peak / before.peak : 1;
   }
   const kept = ((heightSum / SEEDS.length - 1) * 100).toFixed(1);
+  if (inCount !== outCount) failures.push(`${label}: ${inCount} bursts in, ${outCount} out`);
   console.log(
     `  ${label.padEnd(20)} ${String(inCount).padStart(5)} -> ${String(outCount).padEnd(8)}    ${(Number(kept) >= 0 ? "+" : "") + kept} %`,
   );
 }
 console.log();
+
+if (Math.abs(total / counted) > 0.5) {
+  failures.push(`voiced material costs ${(total / counted).toFixed(1)} dB`);
+}
+
+if (failures.length) {
+  console.error(`${failures.length} quality check(s) failed:`);
+  for (const failure of failures) console.error(`  ${failure}`);
+  process.exit(1);
+}
+console.log("quality ok\n");

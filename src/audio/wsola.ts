@@ -22,6 +22,9 @@ const REFERENCE_RATE = 44100;
 /** Pull toward the curve's own answer, as a fraction of the best possible score. */
 const CENTRE_BIAS = 0.15;
 
+/** Normalised match below which the centre bias is dropped. See `bestOffset`. */
+const FREE_SEARCH_BELOW = 0.4;
+
 /**
  * Energy, relative to the take's own average, below which a segment counts as
  * silence. Correlation says nothing there and normalising by a vanishing
@@ -66,9 +69,13 @@ class Matcher {
   /**
    * @param templateAt - Start of the segment the previous grain wants to continue into.
    * @param idealAt - Where the warp curve says to read.
-   * @returns The chosen input start, within `radius` of `idealAt`.
+   * @returns The chosen input start and how well it matched, 0 to 1.
    */
-  bestOffset(signal: Float32Array, templateAt: number, idealAt: number): number {
+  bestOffset(
+    signal: Float32Array,
+    templateAt: number,
+    idealAt: number,
+  ): { at: number; match: number } {
     const { re1, im1, re2, im2, fft, length, radius, energy, floor } = this;
     const size = fft.size;
     const span = length + 2 * radius;
@@ -89,7 +96,7 @@ class Matcher {
     // Nothing to match against: hold the curve's answer rather than let the
     // search wander. Without this the grain drifts a full radius every frame
     // through every gap between phrases, and the take never comes back.
-    if (templateEnergy < floor) return idealAt;
+    if (templateEnergy < floor) return { at: idealAt, match: 1 };
 
     for (let i = 0; i < span; i++) re2[i] = signal[from + i] ?? 0;
 
@@ -119,19 +126,37 @@ class Matcher {
     const lastLag = span - length;
     let best = -Infinity;
     let bestLag = radius;
+    let bestFree = -Infinity;
+    let bestFreeLag = radius;
 
     for (let lag = 0; lag <= lastLag; lag++) {
       const segment = energy[lag + length]! - energy[lag]!;
-      const score =
-        re1[lag]! / Math.sqrt(segment + floor) -
-        (CENTRE_BIAS * ceiling * Math.abs(lag - radius)) / radius;
+      const raw = re1[lag]! / Math.sqrt(segment + floor);
+      if (raw > bestFree) {
+        bestFree = raw;
+        bestFreeLag = lag;
+      }
+
+      const score = raw - (CENTRE_BIAS * ceiling * Math.abs(lag - radius)) / radius;
       if (score > best) {
         best = score;
         bestLag = lag;
       }
     }
 
-    return from + bestLag;
+    // On anything periodic the bias is a useful tiebreak: it keeps the grain
+    // near where the curve asked rather than a period away.
+    //
+    // On noise it is the whole problem. Every candidate correlates about
+    // equally by chance, so the bias decides every time, and every grain lands
+    // exactly on the ideal position. That makes the reused material recur at a
+    // fixed distance — hop x (1 - 1/ratio) — which is a comb, and a comb is the
+    // metallic whistle on a stretched s. Letting chance pick the offset instead
+    // spreads that distance out, and the join is still the best-matching one
+    // available rather than a random cut.
+    const confident = bestFree / (ceiling || 1) >= FREE_SEARCH_BELOW;
+    const chosen = confident ? bestLag : bestFreeLag;
+    return { at: from + chosen, match: ceiling > 0 ? Math.max(0, bestFree / ceiling) : 0 };
   }
 }
 
@@ -170,8 +195,7 @@ export async function warpChannels(
     const ideal = Math.round(inputAt(outputAt));
 
     // The first grain has nothing to continue, so it lands exactly on the curve.
-    const source =
-      previous < 0 ? ideal : matcher.bestOffset(mono, previous + hop, ideal);
+    const source = previous < 0 ? ideal : matcher.bestOffset(mono, previous + hop, ideal).at;
     previous = source;
 
     for (let i = 0; i < window; i++) {

@@ -66,7 +66,11 @@ It shipped at ±40 % and that was the wrong call: it spent its budget flattening
 
 ## Verified
 
-`npm run check` runs four suites. `tools/align-check.ts` synthesises a guide take of twelve syllables and doubles that drift in known ways, then measures where the syllables actually landed:
+`tools/quality.ts` measures what the stretch *sounds* like rather than where it lands: off-harmonic energy on a sustained vowel, spectral flatness of a stretched sibilant, and whether transients survive. Sustained vowels cost nothing measurable at any ratio tested, and 66 consonant bursts go in and 66 come out with their peaks within 1.5 %.
+
+Sibilants were the one real artefact, and the cause was not obvious. Stretching by a ratio reuses material at a fixed distance of roughly hop x (1 - 1/ratio) — about 293 samples at +40 %, which is a comb near 150 Hz, heard as a metallic whistle. The regularity came from the centre bias: on noise every candidate offset correlates about equally by chance, so the bias decided every grain and put each one exactly on the ideal position. Dropping the bias where nothing periodic is found lets chance spread that distance out. Flatness cost went from −2.5 % to −0.4 % at +12 %, and −4.8 % to −3.3 % at +40 %, with no change to voiced material, transients or alignment accuracy.
+
+`npm run check` runs five suites. `tools/align-check.ts` synthesises a guide take of twelve syllables and doubles that drift in known ways, then measures where the syllables actually landed:
 
 | Check | Result |
 |---|---|

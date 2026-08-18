@@ -48,6 +48,7 @@ export async function alignFeatureTracks(
   guides: FeatureTrack[],
   dub: FeatureTrack,
   radius: number,
+  inertia: number,
   progress: DtwProgress = {},
 ): Promise<DtwResult> {
   const guide = guides[0]!;
@@ -106,6 +107,51 @@ export async function alignFeatureTracks(
   const total = new Float32Array(cells);
   const step = new Uint8Array(cells);
 
+  /**
+   * A price on changing pace, charged once per step that is not the diagonal.
+   *
+   * Without it the matcher has nothing to prefer when a phrase repeats itself:
+   * lining syllable three up with syllable three and lining it up with the
+   * similar syllable five cost almost exactly the same, and which of two
+   * near-equal costs wins is then decided by noise in the features. That is why
+   * the takes that were tightest to begin with were the ones that went wrong —
+   * a take already in place has no strong evidence pulling it anywhere, so
+   * anything at all can outvote the truth.
+   *
+   * On the steps rather than on the distance from the diagonal. Charging by
+   * distance was tried first and is the wrong shape: it punishes a take that is
+   * genuinely and steadily late just as hard as one that is wandering, and
+   * since these features barely change through a held syllable, it flattened
+   * real corrections — mean lag went from 2.1 ms to 14 at every setting tried,
+   * from 0.001 upwards. A path that runs straight, however far off the
+   * diagonal, now pays nothing; only changing pace costs, which is exactly the
+   * wandering that throws a syllable across the phrase.
+   *
+   * Charging it only on the rows whose features look ambiguous was tried too —
+   * the surgical version of the same idea — and stopped working entirely: the
+   * spurious drift stayed at its full 43 ms at every setting while the cost
+   * remained. The flat charge is the one that does the job.
+   *
+   * Priced against what the data costs. These are unit vectors, so a genuine
+   * match scores a cosine distance around a thousandth, and an absolute penalty
+   * that looks negligible can still swamp the whole signal. The scale is
+   * measured across the band rather than along the diagonal: a take compared
+   * with itself scores zero there, give or take the last bit of a float, and a
+   * mean landing a hair below zero would flip the penalty into a reward for
+   * wandering.
+   */
+  let scale = 0;
+  let scaleCells = 0;
+  const rowStep = Math.max(1, Math.floor(n / 192));
+  for (let i = 0; i < n; i += rowStep) {
+    for (let j = lo[i]!; j <= hi[i]!; j++) {
+      scale += distance(i, j);
+      scaleCells++;
+    }
+  }
+  scale = scaleCells > 0 ? Math.max(0, scale / scaleCells) : 0;
+  const paceChange = Math.max(0, inertia) * scale;
+
   for (let i = 0; i < n; i++) {
     const start = offset[i]!;
     for (let j = lo[i]!; j <= hi[i]!; j++) local[start + j - lo[i]!] = distance(i, j);
@@ -135,9 +181,10 @@ export async function alignFeatureTracks(
 
       const diagonal = costAt(i - 1, j - 1);
       // The intermediate cell of a two-frame step is charged too, so a wide or
-      // tall step is never cheaper simply for visiting fewer cells.
-      const wide = costAt(i - 1, j - 2) + localAt(i, j - 1);
-      const tall = costAt(i - 2, j - 1) + localAt(i - 1, j);
+      // tall step is never cheaper simply for visiting fewer cells — and each
+      // also pays `paceChange`, since both of them alter the pace.
+      const wide = costAt(i - 1, j - 2) + localAt(i, j - 1) + paceChange;
+      const tall = costAt(i - 2, j - 1) + localAt(i - 1, j) + paceChange;
 
       let best = diagonal;
       let choice = STEP_DIAGONAL;

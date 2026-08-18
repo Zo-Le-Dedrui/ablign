@@ -40,10 +40,25 @@ This is safe for the result: a track's mute sits downstream of its device chain,
 | **Max shift** | 300 ms | The furthest a double may be moved. Also the DTW band, so raising it costs time and memory. |
 | **Smoothing** | 60 ms | Averaging on the warp curve. The raw path jitters inside held vowels where many alignments cost nearly the same; too little smoothing is worse than too much (5 ms measures 17 ms of residual lag, 60 ms measures 1.7 ms). |
 | **Max stretch** | ±100 % | Local time-stretch limit. **This is the tightness control.** The matcher's own step pattern already caps the path slope at 2x, so 100 and above leave the limit inert; below that it only ever tightens. |
+| **Hold** | off | How strongly a take already in place resists being moved. Off is the most accurate reading when the takes give the matcher something to go on, and the most erratic when they do not. |
 | **Silence** | −55 dB | Level below which a frame counts as silence. |
 | **Put it** | Replace, original to a take lane | The aligned take lands on the track, and Live keeps the one it displaced on a take lane below. Also: a new audio track, or a new take lane. |
 
 Every control has a **?** next to it in the dialog that says what it does and which way to move it.
+
+### When the double is already tight
+
+The takes that need the least work are the ones that go wrong. A double already within a few milliseconds gives the matcher no strong evidence anywhere, and where a phrase repeats a similar syllable, lining it up correctly and lining it up with the wrong repeat cost almost the same — so noise in the features decides. On the bench a double within 5 ms picks up 43 ms of spurious drift.
+
+**Hold** prices that. The matcher pays for every change of pace, relative to what the material itself costs, so a path running straight pays nothing however far off it sits and only wandering costs. At 100 the drift falls to 12 ms.
+
+It is off by default because it is a real trade: mean waveform lag goes from 2.1 ms to 5.4 when the features *did* have something to say. Raise it for takes that were tight to begin with, leave it down when a take genuinely needs moving.
+
+Charging by distance from the diagonal rather than by pace changes was tried first and is the wrong shape — it punishes a steadily-late take as hard as a wandering one, and flattened real corrections to 14 ms at every setting from 0.001 up. Charging only the rows whose features look ambiguous was tried too, and stopped working entirely.
+
+### Empty tracks
+
+Dragging a range across three tracks catches the empty one sitting between them. A track with nothing over the selected range is left out of the list, and a render that comes back silent even with monitoring restored is skipped rather than aligned — aligning silence yields nonsense and placing it leaves a bounced empty clip behind.
 
 ### Selecting part of a clip
 

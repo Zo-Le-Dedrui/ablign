@@ -575,6 +575,18 @@
 
           <div class="field">
             <span class="name">
+              <label for="hold">Hold</label>
+              <button type="button" class="help" data-help="hold" aria-label="What Hold does">?</button>
+            </span>
+            <input type="range" id="hold" min="0" max="100" step="5" />
+            <output id="hold-value"></output>
+          </div>
+          <div class="explain" data-for="hold">
+            <p>How strongly a take that is already in place resists being moved. At 0 the matcher decides purely on what it hears, which is the most accurate reading when the takes give it something to go on — and the most erratic when they do not. A double that was already tight offers no strong evidence anywhere, so the alignment can wander and throw a syllable out of place. Raise this for those; it costs a little accuracy elsewhere, so leave it down when a take genuinely needs moving.</p>
+          </div>
+
+          <div class="field">
+            <span class="name">
               <label for="gate">Silence</label>
               <button type="button" class="help" data-help="gate" aria-label="What Silence does">?</button>
             </span>
@@ -731,6 +743,7 @@
           ["maxShift", (v) => v + " ms"],
           ["smoothing", (v) => (Number(v) === 0 ? "off" : v + " ms")],
           ["maxStretch", (v) => "±" + v + " %"],
+          ["hold", (v) => (Number(v) === 0 ? "off" : v + " %")],
           ["gate", (v) => v + " dB"],
         ];
         for (const [id, format] of sliders) {
@@ -764,6 +777,7 @@
             smoothingMs: Number(document.getElementById("smoothing").value),
             maxStretchPercent: Number(document.getElementById("maxStretch").value),
             gateDb: Number(document.getElementById("gate").value),
+            holdPercent: Number(document.getElementById("hold").value),
           });
         });
       }

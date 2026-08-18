@@ -32,6 +32,17 @@ export interface AlignSettings {
   maxStretchPercent: number;
   /** Level below which a frame counts as silence, dBFS. */
   gateDb: number;
+  /**
+   * How strongly a take that is already in place resists being moved, 0–100.
+   *
+   * The matcher charges this for every change of pace, priced against what the
+   * material itself costs. At 0 it decides purely on the features, which is the
+   * most accurate reading when they have something to say — and the most
+   * erratic when they do not. Raise it for takes that were tight to begin with:
+   * there the features have no strong opinion, and without a preference the
+   * path wanders.
+   */
+  holdPercent: number;
 }
 
 export const DEFAULT_SETTINGS: AlignSettings = {
@@ -43,6 +54,11 @@ export const DEFAULT_SETTINGS: AlignSettings = {
   // measured lag against the guide goes from 1.7 ms to 14 ms.
   maxStretchPercent: 100,
   gateDb: -55,
+  // Off by default: it measurably costs accuracy where the features are
+  // informative (2.1 ms of mean lag becomes 5.4), and buys stability only where
+  // they are not (43 ms of spurious drift on an already-tight take becomes 12).
+  // That is a trade to make deliberately, not one to impose.
+  holdPercent: 0,
 };
 
 export interface AlignHooks {
@@ -143,7 +159,11 @@ export async function alignAgainst(
     2,
     Math.round((settings.maxShiftMs / 1000) * sampleRate / HOP),
   );
-  const { map, cost } = await alignFeatureTracks(guide.features, dubFeatures, radius, {
+  // 100 on the dial buys a price of 0.05 per pace change, which is where the
+  // sweep stopped gaining stability and kept costing accuracy.
+  const inertia = (Math.min(100, Math.max(0, settings.holdPercent)) / 100) * 0.05;
+
+  const { map, cost } = await alignFeatureTracks(guide.features, dubFeatures, radius, inertia, {
     onProgress: (fraction) => hooks.onStage?.("Matching", 0.15 + fraction * 0.35) ?? Promise.resolve(),
     ...(hooks.shouldAbort ? { shouldAbort: hooks.shouldAbort } : {}),
   });

@@ -30,7 +30,7 @@
     "build:dev": "tsc --noEmit && tsx tools/dialog-check.ts && tsx tools/safety-check.ts && tsx build.ts",
     "start": "npm run build:dev && ableton-extensions-cli run",
     "package": "npm run build && tsx tools/activate-check.ts && ableton-extensions-cli package",
-    "check": "tsx tools/align-check.ts && tsx tools/attack-check.ts && tsx tools/sibilant-check.ts && tsx tools/quality.ts && tsx tools/dialog-check.ts && tsx tools/safety-check.ts && tsx tools/activate-check.ts"
+    "check": "tsx tools/align-check.ts && tsx tools/attack-check.ts && tsx tools/stability-check.ts && tsx tools/sibilant-check.ts && tsx tools/quality.ts && tsx tools/dialog-check.ts && tsx tools/safety-check.ts && tsx tools/activate-check.ts"
   },
   "dependencies": {
     "@ableton-extensions/sdk": "file:./vendor/ableton-extensions-sdk-1.0.0-beta.1.tgz"

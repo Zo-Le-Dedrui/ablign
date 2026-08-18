@@ -428,9 +428,12 @@ export function activate(activation: ActivationContext) {
       if (group) groupIds.add(group.handle.id);
     }
 
+    const edge = 1e-6;
     const handles: Handle[] = [];
     const names: string[] = [];
     let groupsSkipped = 0;
+    let emptySkipped = 0;
+
     for (const handle of selection.selected_lanes) {
       const object = context.getObjectFromHandle(handle, DataModelObject);
       if (!(object instanceof AudioTrack)) continue;
@@ -438,6 +441,19 @@ export function activate(activation: ActivationContext) {
         groupsSkipped++;
         continue;
       }
+
+      // Dragging a range across three tracks catches the empty one sitting
+      // between them. Rendering it produces silence, aligning silence produces
+      // nonsense, and placing it leaves a bounced empty clip in the Set — so it
+      // never gets that far.
+      const hasAudio = object.arrangementClips.some(
+        (clip) => clip.endTime > from + edge && clip.startTime < to - edge && !clip.muted,
+      );
+      if (!hasAudio) {
+        emptySkipped++;
+        continue;
+      }
+
       handles.push(handle);
       names.push(object.name);
     }
@@ -447,7 +463,9 @@ export function activate(activation: ActivationContext) {
         context,
         groupsSkipped > 0
           ? "Ablign needs at least two ordinary audio tracks. Group tracks cannot be rendered, so they are left out — select the tracks inside the group instead."
-          : "Ablign needs at least two audio tracks: the guide, and one or more doubles. Drag a time range across all of them, then right-click inside it.",
+          : emptySkipped > 0
+            ? "Ablign needs at least two audio tracks with something on them over this range. Tracks that are empty here are left out."
+            : "Ablign needs at least two audio tracks: the guide, and one or more doubles. Drag a time range across all of them, then right-click inside it.",
       );
       return;
     }
@@ -473,10 +491,11 @@ export function activate(activation: ActivationContext) {
           smoothing: DEFAULT_SETTINGS.smoothingMs,
           maxStretch: DEFAULT_SETTINGS.maxStretchPercent,
           gate: DEFAULT_SETTINGS.gateDb,
+          hold: DEFAULT_SETTINGS.holdPercent,
         },
       },
       470,
-      580,
+      610,
     );
 
     if (!answer.apply) return;
@@ -487,6 +506,7 @@ export function activate(activation: ActivationContext) {
       smoothingMs: answer.smoothingMs ?? DEFAULT_SETTINGS.smoothingMs,
       maxStretchPercent: answer.maxStretchPercent ?? DEFAULT_SETTINGS.maxStretchPercent,
       gateDb: answer.gateDb ?? DEFAULT_SETTINGS.gateDb,
+      holdPercent: answer.holdPercent ?? DEFAULT_SETTINGS.holdPercent,
     };
     const destination: Destination = answer.destination ?? "replace";
     const chain = answer.chain === true;
@@ -498,6 +518,9 @@ export function activate(activation: ActivationContext) {
 
     if (groupsSkipped > 0) {
       console.log(`[Ablign] left out ${groupsSkipped} group track(s): they cannot be rendered`);
+    }
+    if (emptySkipped > 0) {
+      console.log(`[Ablign] left out ${emptySkipped} track(s) with nothing over this range`);
     }
 
     const poor: string[] = [];
@@ -556,6 +579,14 @@ export function activate(activation: ActivationContext) {
               dubAudio = await renderTrack(context, dubTrack, from, to);
             }
             if (abortSignal.aborted) return;
+
+            // Still silent with monitoring restored: there is genuinely nothing
+            // there. Aligning silence yields nonsense and placing it leaves an
+            // empty bounce behind, so the take is skipped.
+            if (isSilent(dubAudio)) {
+              console.log(`[Ablign] skipped ${dubName}: nothing to align over this range`);
+              continue;
+            }
 
             progress.stage = `aligning ${dubName}`;
             const result = await alignAgainst(guide, dubAudio, settings, {

@@ -14,7 +14,8 @@ Built on the Ableton Extensions SDK `1.0.0-beta.1`.
 2. Each render is reduced to one feature vector every 5.8 ms — 24 mel bands describing spectral shape, plus a "quiet" axis so silences match silences instead of correlating noise against noise.
 3. Banded dynamic time warping finds the path between guide and double. The band is the **Max shift** setting, so the alignment cannot drift further than you allowed, and the cost stays linear in the length of the selection.
 4. The raw path is smoothed, scaled by **Strength**, slope-limited to **Max stretch**, and pinned at both ends so the result occupies exactly the range you selected.
-5. WSOLA stretches the double along that curve and the result is imported as a new clip.
+5. The map is then refined below the matcher's own resolution: fine envelopes of both takes, at sub-millisecond steps, are cross-correlated around each mapped position, and the few-millisecond residual they can still see bends the map before it is shaped. Envelopes rather than waveforms, because two performances share their energy contour but not their phase.
+6. WSOLA stretches the double along that curve and the result is imported as a new clip.
 
 ### Silence while it works
 
@@ -74,13 +75,15 @@ Sibilants are also left at their own length rather than stretched. Two takes of 
 
 That costs a little accuracy on the synthetic bench — mean waveform lag goes from 1.9 ms to 3.6 ms — because its syllables are noisy along their whole length and so are partly protected. Real speech is sibilant for a much smaller share of its duration.
 
-A phrase that starts cold — silence, then a hit — lands its opening attack exactly rather than approximately. In the silence before it every offset matches every other, so the matcher's path there is arbitrary, and the curve used to approach the first attack through an average of that. It now ramps from zero through the leading and trailing quiet straight to the first audible frame: the silence is where a correction is free, since nothing plays there. Cold-start attacks measure 2.8 ms instead of 7.0 ms, and a uniformly early double is corrected fully instead of partially; `tools/attack-check.ts` guards both.
+A phrase that starts cold — silence, then a hit — lands its opening attack exactly rather than approximately. In the silence before it every offset matches every other, so the matcher's path there is arbitrary, and the curve used to approach the first attack through an average of that. It now ramps from zero through the leading and trailing quiet straight to the first audible frame: the silence is where a correction is free, since nothing plays there. Cold-start attacks measure 1.9 ms instead of 7.0 ms, and a uniformly early double is corrected fully instead of partially; `tools/attack-check.ts` guards both.
+
+Two optimisations were tried on the way to those numbers and rejected by measurement: halving the analysis hop, the obvious way to buy resolution, made the mean lag *worse* (3.5 ms to 5.1 at 1.6x the cost — a finer path has more tie-break jitter to smooth), and weighting the curve smoothing by audibility took it to 16 ms. The envelope refinement is what actually closed the gap, and it costs nothing measurable at runtime.
 
 `npm run check` runs seven suites. `tools/align-check.ts` synthesises a guide take of twelve syllables and doubles that drift in known ways, then measures where the syllables actually landed:
 
 | Check | Result |
 |---|---|
-| Waveform lag, realistic double | 40.8 ms → **1.9 ms** mean, 5.8 ms worst |
+| Waveform lag, realistic double | 40.8 ms → **2.1 ms** mean, 5.8 ms worst — through sibilant protection |
 | Onset error, same take | 42 ms → **2 ms** (27.9x better) |
 | Self-alignment is a no-op | peak shift 0.0 ms, residual **−120 dB** |
 | Stereo channels stay locked | worst deviation 2.5e-7 |

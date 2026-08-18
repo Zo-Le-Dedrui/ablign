@@ -14,6 +14,7 @@ import {
 } from "./audio/features.js";
 import { alignFeatureTracks } from "./audio/dtw.js";
 import { peakShiftFrames, shapeWarpCurve } from "./audio/curve.js";
+import { fineEnvelope, refineMap } from "./audio/refine.js";
 import { warpChannels } from "./audio/wsola.js";
 
 export interface AlignSettings {
@@ -66,6 +67,8 @@ export interface AlignResult {
 export interface PreparedGuide {
   /** The lead first, then any aligned doubles chained on after it. */
   features: FeatureTrack[];
+  /** Fine envelope of the lead, for sub-frame refinement of the map. */
+  envelope: Float32Array;
   length: number;
   sampleRate: number;
 }
@@ -74,8 +77,10 @@ export function prepareGuide(guide: DecodedAudio, settings: AlignSettings): Prep
   if (guide.length < FFT_SIZE * 4) {
     throw new Error("Selection is too short to align — use at least half a second.");
   }
+  const mono = toMono(guide);
   return {
-    features: [extractAlignmentFeatures(toMono(guide), guide.sampleRate, settings.gateDb)],
+    features: [extractAlignmentFeatures(mono, guide.sampleRate, settings.gateDb)],
+    envelope: fineEnvelope(mono),
     length: guide.length,
     sampleRate: guide.sampleRate,
   };
@@ -151,8 +156,14 @@ export async function alignAgainst(
     anchor[i] = dubFeatures.loudness[at]!;
   }
 
-  const curve = shapeWarpCurve(map, {
-    resist: sibilantRuns(dubFeatures, map),
+  // The matcher's map is quantised to its own frames; the audio underneath is
+  // not. Reading the leftover few-millisecond lag off fine envelopes and
+  // bending the map by it is what closes the last visible smear at full
+  // strength.
+  const refined = refineMap(map, guide.envelope, fineEnvelope(dubMono), anchor, sampleRate);
+
+  const curve = shapeWarpCurve(refined, {
+    resist: sibilantRuns(dubFeatures, refined),
     anchor,
     strength: Math.min(1, Math.max(0, settings.strength / 100)),
     smoothingFrames: Math.max(

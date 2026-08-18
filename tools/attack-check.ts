@@ -149,7 +149,7 @@ const bangTimes = [0.8, 1.25];
   const before = errorAt(bangTimes, onsets(dub.channels[0]!));
   const after = errorAt(bangTimes, onsets(result.channels[0]!));
 
-  check("cold-start attacks land", after < 5, `${before.toFixed(1)} ms -> ${after.toFixed(1)} ms`);
+  check("cold-start attacks land", after < 3.5, `${before.toFixed(1)} ms -> ${after.toFixed(1)} ms`);
 }
 
 // Uniformly early: everything 50 ms ahead, including at the selection edges.
@@ -166,7 +166,7 @@ const bangTimes = [0.8, 1.25];
   const before = errorAt(bangTimes, onsets(dub.channels[0]!));
   const after = errorAt(bangTimes, onsets(result.channels[0]!));
 
-  check("uniform offset still corrected", after < 8, `${before.toFixed(1)} ms -> ${after.toFixed(1)} ms`);
+  check("uniform offset still corrected", after < 3.5, `${before.toFixed(1)} ms -> ${after.toFixed(1)} ms`);
 }
 
 if (failures.length) {

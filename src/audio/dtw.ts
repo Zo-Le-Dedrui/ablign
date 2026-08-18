@@ -18,6 +18,14 @@ import { FEATURE_SIZE, type FeatureTrack } from "./features.js";
 /** Refuse rather than ask Live for a gigabyte. Roughly 10 min at ±300 ms. */
 const MAX_CELLS = 48_000_000;
 
+/**
+ * Loudness below which a double's frame carries no usable evidence.
+ *
+ * `loudness` is already gated: it reaches 0 at the Silence setting and rises
+ * over the 40 dB above it, so this is a little over 4 dB into that range.
+ */
+const SILENT_BELOW = 0.1;
+
 const STEP_DIAGONAL = 0;
 const STEP_WIDE = 1; // (i-1, j-2): the dub covers two frames while the guide covers one
 const STEP_TALL = 2; // (i-2, j-1): the guide covers two frames while the dub covers one
@@ -37,12 +45,21 @@ export interface DtwResult {
 /**
  * @param radius - Band half-width in frames; the largest shift the path may use.
  */
+/**
+ * @param guides - References to match against, all on the same timeline and of
+ *   the same length. More than one is the point of chaining: a double often
+ *   resembles the double above it more than it resembles the lead, and taking
+ *   whichever agrees best at each frame lets it use both. The frames where they
+ *   disagree are exactly the ambiguous ones.
+ */
 export async function alignFeatureTracks(
-  guide: FeatureTrack,
+  guides: FeatureTrack[],
   dub: FeatureTrack,
   radius: number,
+  inertia: number,
   progress: DtwProgress = {},
 ): Promise<DtwResult> {
+  const guide = guides[0]!;
   const n = guide.frameCount;
   const m = dub.frameCount;
   if (n < 4 || m < 4) throw new Error("Selection is too short to align.");
@@ -70,25 +87,112 @@ export async function alignFeatureTracks(
     );
   }
 
-  const guideData = guide.data;
+  // Only references that line up frame for frame can be compared this way.
+  const references = guides
+    .filter((track) => track.frameCount === n)
+    .map((track) => track.data);
   const dubData = dub.data;
 
-  /** Cosine distance in [0, 2]; both sides are unit vectors. */
+  /**
+   * Cosine distance in [0, 2]; both sides are unit vectors. With several
+   * references, the closest one wins the frame — an average would let a
+   * reference that is wrong here blur one that is right.
+   */
   const distance = (i: number, j: number): number => {
     const a = i * FEATURE_SIZE;
     const b = j * FEATURE_SIZE;
-    let dot = 0;
-    for (let k = 0; k < FEATURE_SIZE; k++) dot += guideData[a + k]! * dubData[b + k]!;
-    return 1 - dot;
+    let best = Infinity;
+    for (const data of references) {
+      let dot = 0;
+      for (let k = 0; k < FEATURE_SIZE; k++) dot += data[a + k]! * dubData[b + k]!;
+      const cost = 1 - dot;
+      if (cost < best) best = cost;
+    }
+    return best;
   };
 
   const local = new Float32Array(cells);
   const total = new Float32Array(cells);
   const step = new Uint8Array(cells);
 
+  /**
+   * A price on changing pace, charged once per step that is not the diagonal.
+   *
+   * Without it the matcher has nothing to prefer when a phrase repeats itself:
+   * lining syllable three up with syllable three and lining it up with the
+   * similar syllable five cost almost exactly the same, and which of two
+   * near-equal costs wins is then decided by noise in the features. That is why
+   * the takes that were tightest to begin with were the ones that went wrong —
+   * a take already in place has no strong evidence pulling it anywhere, so
+   * anything at all can outvote the truth.
+   *
+   * On the steps rather than on the distance from the diagonal. Charging by
+   * distance was tried first and is the wrong shape: it punishes a take that is
+   * genuinely and steadily late just as hard as one that is wandering, and
+   * since these features barely change through a held syllable, it flattened
+   * real corrections — mean lag went from 2.1 ms to 14 at every setting tried,
+   * from 0.001 upwards. A path that runs straight, however far off the
+   * diagonal, now pays nothing; only changing pace costs, which is exactly the
+   * wandering that throws a syllable across the phrase.
+   *
+   * Charging it only on the rows whose features look ambiguous was tried too —
+   * the surgical version of the same idea — and stopped working entirely: the
+   * spurious drift stayed at its full 43 ms at every setting while the cost
+   * remained. The flat charge is the one that does the job.
+   *
+   * Priced against what the data costs. These are unit vectors, so a genuine
+   * match scores a cosine distance around a thousandth, and an absolute penalty
+   * that looks negligible can still swamp the whole signal. The scale is
+   * measured across the band rather than along the diagonal: a take compared
+   * with itself scores zero there, give or take the last bit of a float, and a
+   * mean landing a hair below zero would flip the penalty into a reward for
+   * wandering.
+   */
+  let scale = 0;
+  let scaleCells = 0;
+  const rowStep = Math.max(1, Math.floor(n / 192));
+  for (let i = 0; i < n; i += rowStep) {
+    for (let j = lo[i]!; j <= hi[i]!; j++) {
+      scale += distance(i, j);
+      scaleCells++;
+    }
+  }
+  scale = scaleCells > 0 ? Math.max(0, scale / scaleCells) : 0;
+  const paceChange = Math.max(0, inertia) * scale;
+
+  /**
+   * Where the double is silent, every column costs the same.
+   *
+   * A backing part does not sing every word the lead sings. On the real take
+   * that prompted this, four of the lead's thirteen syllables had no
+   * counterpart within 900 ms — the double simply is not there. The matcher
+   * still has to map those frames somewhere, and the "quiet" axis in the
+   * feature vector makes silence look actively wrong under a loud lead, so it
+   * reaches for whatever material is nearest and drags the path off the
+   * syllables that *did* have a counterpart.
+   *
+   * Giving those columns a flat cost lets the path coast through instead. It
+   * has no reason to prefer any of them, so the step pattern and the anchored
+   * material either side decide, which is the only honest answer available:
+   * there is nothing there to align to.
+   *
+   * The flat value is the band's own mean, so coasting is neither cheaper nor
+   * dearer than matching — the path is not pushed into silence or away from it.
+   *
+   * Only when the silence is one-sided. Where both takes are quiet the silence
+   * is real evidence and the quiet axis matches it correctly; flattening that
+   * too was tried and cost the main bench 2.1 ms of mean lag against 12.8.
+   */
+  const dubLoudness = dub.loudness;
+  const guideLoudness = guide.loudness;
+
   for (let i = 0; i < n; i++) {
     const start = offset[i]!;
-    for (let j = lo[i]!; j <= hi[i]!; j++) local[start + j - lo[i]!] = distance(i, j);
+    const leadIsSinging = guideLoudness[i]! >= SILENT_BELOW;
+    for (let j = lo[i]!; j <= hi[i]!; j++) {
+      const oneSided = leadIsSinging && dubLoudness[j]! < SILENT_BELOW;
+      local[start + j - lo[i]!] = oneSided ? scale : distance(i, j);
+    }
   }
 
   /** Accumulated cost at (i, j), or Infinity outside the band. */
@@ -115,9 +219,10 @@ export async function alignFeatureTracks(
 
       const diagonal = costAt(i - 1, j - 1);
       // The intermediate cell of a two-frame step is charged too, so a wide or
-      // tall step is never cheaper simply for visiting fewer cells.
-      const wide = costAt(i - 1, j - 2) + localAt(i, j - 1);
-      const tall = costAt(i - 2, j - 1) + localAt(i - 1, j);
+      // tall step is never cheaper simply for visiting fewer cells — and each
+      // also pays `paceChange`, since both of them alter the pace.
+      const wide = costAt(i - 1, j - 2) + localAt(i, j - 1) + paceChange;
+      const tall = costAt(i - 2, j - 1) + localAt(i - 1, j) + paceChange;
 
       let best = diagonal;
       let choice = STEP_DIAGONAL;

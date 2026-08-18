@@ -14,7 +14,8 @@ Built on the Ableton Extensions SDK `1.0.0-beta.1`.
 2. Each render is reduced to one feature vector every 5.8 ms — 24 mel bands describing spectral shape, plus a "quiet" axis so silences match silences instead of correlating noise against noise.
 3. Banded dynamic time warping finds the path between guide and double. The band is the **Max shift** setting, so the alignment cannot drift further than you allowed, and the cost stays linear in the length of the selection.
 4. The raw path is smoothed, scaled by **Strength**, slope-limited to **Max stretch**, and pinned at both ends so the result occupies exactly the range you selected.
-5. WSOLA stretches the double along that curve and the result is imported as a new clip.
+5. The map is then refined below the matcher's own resolution: fine envelopes of both takes, at sub-millisecond steps, are cross-correlated around each mapped position, and the few-millisecond residual they can still see bends the map before it is shaped. Envelopes rather than waveforms, because two performances share their energy contour but not their phase.
+6. WSOLA stretches the double along that curve and the result is imported as a new clip.
 
 ### Silence while it works
 
@@ -36,13 +37,44 @@ This is safe for the result: a track's mute sits downstream of its device chain,
 | Control | Default | What it does |
 |---|---|---|
 | **Strength** | 100 % | How much of the measured correction to apply. 0 % is an exact bypass. |
-| **Max shift** | 300 ms | The furthest a double may be moved. Also the DTW band, so raising it costs time and memory. |
+| **Max shift** | 200 ms | The furthest a double may be moved, and the first control to reach for when a syllable lands on the wrong word. Also the DTW band, so raising it costs time and memory. |
 | **Smoothing** | 60 ms | Averaging on the warp curve. The raw path jitters inside held vowels where many alignments cost nearly the same; too little smoothing is worse than too much (5 ms measures 17 ms of residual lag, 60 ms measures 1.7 ms). |
 | **Max stretch** | ±100 % | Local time-stretch limit. **This is the tightness control.** The matcher's own step pattern already caps the path slope at 2x, so 100 and above leave the limit inert; below that it only ever tightens. |
+| **Hold** | off | How strongly a take already in place resists being moved. Off is the most accurate reading when the takes give the matcher something to go on, and the most erratic when they do not. |
 | **Silence** | −55 dB | Level below which a frame counts as silence. |
 | **Put it** | Replace, original to a take lane | The aligned take lands on the track, and Live keeps the one it displaced on a take lane below. Also: a new audio track, or a new take lane. |
 
 Every control has a **?** next to it in the dialog that says what it does and which way to move it.
+
+### When the double does not sing every word
+
+A backing part often emphasises some words and leaves others alone. On the real take this was diagnosed from, four of the lead's thirteen syllables had no counterpart in the double within 900 ms — the double simply is not there.
+
+The matcher still has to map those frames somewhere, and the quiet axis in the feature vector makes silence look actively wrong under a loud lead, so it reaches for whatever material is nearest and drags the path off the syllables that *did* have a counterpart. Where the lead sings and the double is silent, every column now costs the same, so the path coasts through instead of being pulled. Only when the silence is one-sided: where both takes are quiet the silence is real evidence, and flattening that too cost the synthetic bench 2.1 ms of mean lag against 12.8.
+
+Measured on that take, over the nine syllables that do have counterparts, the result stops depending on the Max shift setting: 17 to 25 ms across 100, 200 and 300 ms against 16 to 37 before, and at most one syllable past 60 ms instead of two. It is one real example, so treat the numbers as a direction rather than a specification.
+
+What no alignment can do is put a word where the double never sang one. Those four syllables stay silent in the result, and that is correct.
+
+### When a syllable lands on the wrong word
+
+Narrow **Max shift**. A wide setting is not the cautious choice: it is the licence for the matcher to reach two syllables away and take the wrong one, and the cost of doing so is small because a short syllable contributes few frames to the path.
+
+This was diagnosed from a session log rather than from a bench. Every run reported a peak shift of 292 to 321 ms against the 300 ms limit — the alignment pinned against its own band, moving the take as far as it was allowed and no further. Raising the limit to 800 ms made it worse; dropping it to 100 ms fixed it. The default is now 200 ms, which measures identical to 300 on every bench here while halving the room to go astray, and a correction that wanted more says CLIPPED in the log.
+
+### When the double is already tight
+
+The takes that need the least work are the ones that go wrong. A double already within a few milliseconds gives the matcher no strong evidence anywhere, and where a phrase repeats a similar syllable, lining it up correctly and lining it up with the wrong repeat cost almost the same — so noise in the features decides. On the bench a double within 5 ms picks up 43 ms of spurious drift.
+
+**Hold** prices that. The matcher pays for every change of pace, relative to what the material itself costs, so a path running straight pays nothing however far off it sits and only wandering costs. At 100 the drift falls to 12 ms.
+
+It is off by default because it is a real trade: mean waveform lag goes from 2.1 ms to 5.4 when the features *did* have something to say. Raise it for takes that were tight to begin with, leave it down when a take genuinely needs moving.
+
+Charging by distance from the diagonal rather than by pace changes was tried first and is the wrong shape — it punishes a steadily-late take as hard as a wandering one, and flattened real corrections to 14 ms at every setting from 0.001 up. Charging only the rows whose features look ambiguous was tried too, and stopped working entirely.
+
+### Empty tracks
+
+Dragging a range across three tracks catches the empty one sitting between them. A track with nothing over the selected range is left out of the list, and a render that comes back silent even with monitoring restored is skipped rather than aligned — aligning silence yields nonsense and placing it leaves a bounced empty clip behind.
 
 ### Selecting part of a clip
 
@@ -66,11 +98,23 @@ It shipped at ±40 % and that was the wrong call: it spent its budget flattening
 
 ## Verified
 
-`npm run check` runs four suites. `tools/align-check.ts` synthesises a guide take of twelve syllables and doubles that drift in known ways, then measures where the syllables actually landed:
+`tools/quality.ts` measures what the stretch *sounds* like rather than where it lands: off-harmonic energy on a sustained vowel, spectral flatness of a stretched sibilant, and whether transients survive. Sustained vowels cost nothing measurable at any ratio tested, and 66 consonant bursts go in and 66 come out with their peaks within 1.5 %.
+
+Sibilants were the one real artefact, and the cause was not obvious. Stretching by a ratio reuses material at a fixed distance of roughly hop x (1 - 1/ratio) — about 293 samples at +40 %, which is a comb near 150 Hz, heard as a metallic whistle. The regularity came from the centre bias: on noise every candidate offset correlates about equally by chance, so the bias decided every grain and put each one exactly on the ideal position. Dropping the bias where nothing periodic is found lets chance spread that distance out. Flatness cost went from −2.5 % to −0.4 % at +12 %, and −4.8 % to −3.3 % at +40 %, with no change to voiced material, transients or alignment accuracy.
+
+Sibilants are also left at their own length rather than stretched. Two takes of the same word hold the s differently, and matching them means stretching one — measured at +50 % on a double whose s is half the length of the guide's. A stretched s is where overlap-add sounds worst, and its duration is the least audible thing about it, so short runs of high-frequency energy are held at their own length and the vowels either side absorb the correction. The words still land in the same place; `tools/sibilant-check.ts` guards it.
+
+That costs a little accuracy on the synthetic bench — mean waveform lag goes from 1.9 ms to 3.6 ms — because its syllables are noisy along their whole length and so are partly protected. Real speech is sibilant for a much smaller share of its duration.
+
+A phrase that starts cold — silence, then a hit — lands its opening attack exactly rather than approximately. In the silence before it every offset matches every other, so the matcher's path there is arbitrary, and the curve used to approach the first attack through an average of that. It now ramps from zero through the leading and trailing quiet straight to the first audible frame: the silence is where a correction is free, since nothing plays there. Cold-start attacks measure 1.9 ms instead of 7.0 ms, and a uniformly early double is corrected fully instead of partially; `tools/attack-check.ts` guards both.
+
+Two optimisations were tried on the way to those numbers and rejected by measurement: halving the analysis hop, the obvious way to buy resolution, made the mean lag *worse* (3.5 ms to 5.1 at 1.6x the cost — a finer path has more tie-break jitter to smooth), and weighting the curve smoothing by audibility took it to 16 ms. The envelope refinement is what actually closed the gap, and it costs nothing measurable at runtime.
+
+`npm run check` runs seven suites. `tools/align-check.ts` synthesises a guide take of twelve syllables and doubles that drift in known ways, then measures where the syllables actually landed:
 
 | Check | Result |
 |---|---|
-| Waveform lag, realistic double | 40.8 ms → **1.9 ms** mean, 5.8 ms worst |
+| Waveform lag, realistic double | 40.8 ms → **2.1 ms** mean, 5.8 ms worst — through sibilant protection |
 | Onset error, same take | 42 ms → **2 ms** (27.9x better) |
 | Self-alignment is a no-op | peak shift 0.0 ms, residual **−120 dB** |
 | Stereo channels stay locked | worst deviation 2.5e-7 |

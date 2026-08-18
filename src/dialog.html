@@ -353,6 +353,22 @@
         cursor: pointer;
       }
 
+      .check {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--text-primary);
+        cursor: pointer;
+      }
+
+      .check input {
+        width: 12px;
+        height: 12px;
+        margin: 0;
+        accent-color: var(--accent);
+        cursor: pointer;
+      }
+
       .chips {
         display: flex;
         gap: 4px;
@@ -492,6 +508,17 @@
             <p>The takes that get moved onto the guide. Tick as many as you like — a backing pair, left and right, goes through in one pass.</p>
           </div>
 
+          <div class="field wide">
+            <span class="name">
+              <label for="chain">Chain</label>
+              <button type="button" class="help" data-help="chain" aria-label="What Chain does">?</button>
+            </span>
+            <label class="check"><input type="checkbox" id="chain" /><span>Use each aligned take as a reference for the next</span></label>
+          </div>
+          <div class="explain" data-for="chain">
+            <p>Off, every double is matched against the guide alone. On, a double is also matched against the ones already aligned above it, and each frame is judged by whichever reference agrees best. A backing part usually resembles the backing part beside it — same register, same delivery — more than it resembles the lead, so the extra reference helps most exactly where the lead alone is ambiguous. Takes are used in the order they appear in the list. Off by default: on synthetic material it measures no better than the lead alone, so try it on your own tracks and keep it only if you hear the difference.</p>
+          </div>
+
           <div id="warning"></div>
         </section>
 
@@ -519,7 +546,7 @@
             <output id="maxShift-value"></output>
           </div>
           <div class="explain" data-for="maxShift">
-            <p>How far Ablign may look when hunting for a word. Too small and it cannot reach a take that drags badly; too large and it risks locking onto a similar-sounding word further away.</p>
+            <p>How far Ablign may look when hunting for a word. This is the control to reach for when a syllable lands on the wrong word: a wide setting is not the cautious choice, it is the licence to go looking two syllables away and take the wrong one. Narrow it — 100 to 150 ms suits most doubles — and the search physically cannot stray. Widen it only for a take that genuinely enters late, and the log says CLIPPED when a correction wanted more room than it was given.</p>
           </div>
 
           <div class="field">
@@ -544,6 +571,18 @@
           </div>
           <div class="explain" data-for="maxStretch">
             <p>How hard the gap between two words may be stretched or squeezed. A correction needing more than this comes out only partly applied. Lower it if a take warbles where it had to stretch a long way.</p>
+          </div>
+
+          <div class="field">
+            <span class="name">
+              <label for="hold">Hold</label>
+              <button type="button" class="help" data-help="hold" aria-label="What Hold does">?</button>
+            </span>
+            <input type="range" id="hold" min="0" max="100" step="5" />
+            <output id="hold-value"></output>
+          </div>
+          <div class="explain" data-for="hold">
+            <p>How strongly a take that is already in place resists being moved. At 0 the matcher decides purely on what it hears, which is the most accurate reading when the takes give it something to go on — and the most erratic when they do not. A double that was already tight offers no strong evidence anywhere, so the alignment can wander and throw a syllable out of place. Raise this for those; it costs a little accuracy elsewhere, so leave it down when a take genuinely needs moving.</p>
           </div>
 
           <div class="field">
@@ -629,6 +668,9 @@
           });
         }
 
+        const chainBox = document.getElementById("chain");
+        chainBox.checked = payload.chain === true;
+
         const guideSelect = document.getElementById("guide");
         const dubList = document.getElementById("dubs");
         const boxes = [];
@@ -701,6 +743,7 @@
           ["maxShift", (v) => v + " ms"],
           ["smoothing", (v) => (Number(v) === 0 ? "off" : v + " ms")],
           ["maxStretch", (v) => "±" + v + " %"],
+          ["hold", (v) => (Number(v) === 0 ? "off" : v + " %")],
           ["gate", (v) => v + " dB"],
         ];
         for (const [id, format] of sliders) {
@@ -728,11 +771,13 @@
               .filter(({ box }) => box.checked)
               .map(({ box }) => Number(box.value)),
             destination: destination.value,
+            chain: chainBox.checked,
             strength: Number(document.getElementById("strength").value),
             maxShiftMs: Number(document.getElementById("maxShift").value),
             smoothingMs: Number(document.getElementById("smoothing").value),
             maxStretchPercent: Number(document.getElementById("maxStretch").value),
             gateDb: Number(document.getElementById("gate").value),
+            holdPercent: Number(document.getElementById("hold").value),
           });
         });
       }

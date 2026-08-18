@@ -11,6 +11,31 @@
  */
 
 export interface CurveOptions {
+  /**
+   * Per-frame resistance to being stretched, 0 to 1, indexed like the curve.
+   *
+   * A stretched s hisses: overlap-add has to reuse material, and reused noise
+   * combs against itself. The length of an s is also the least audible thing
+   * about it, so it keeps its own and the correction it would have absorbed
+   * goes to the vowels either side. The words still land in the same place.
+   */
+  resist?: Float32Array;
+  /**
+   * Per-frame audibility, 0 to 1, indexed like the curve — the loudness of the
+   * material the output will actually play.
+   *
+   * In the silence before a phrase starts cold, every offset matches every
+   * other, so the matcher's path there is arbitrary — and it is also the one
+   * place a correction is free, because nothing plays there. So instead of
+   * de-tilting the curve against whatever the smoothing left at the edges, the
+   * curve is ramped from zero through the leading and trailing quiet straight
+   * to the first and last audible frames, and the opening attack is met
+   * exactly rather than approached through an average of silence.
+   */
+  anchor?: Float32Array;
+  // (Weighting the smoothing itself by this same audibility was tried and
+  // measured worse everywhere — 3.6 ms of mean lag became 16 ms — so the
+  // anchor's one job is the edge ramp above.)
   /** How much of the measured correction to apply, 0–1. */
   strength: number;
   /** Moving-average half-width, in frames. */
@@ -51,16 +76,38 @@ export function shapeWarpCurve(map: Float32Array, options: CurveOptions): Float3
   const shift = new Float32Array(n);
   for (let i = 0; i < n; i++) shift[i] = map[i]! - i * slope;
 
+  const anchor = options.anchor && options.anchor.length >= n ? options.anchor : undefined;
   const smoothed = movingAverage(shift, options.smoothingFrames);
 
-  // Scale by strength, then remove any tilt smoothing introduced at the edges,
-  // so the aligned take still starts and ends exactly where the guide does.
   const scaled = new Float32Array(n);
   for (let i = 0; i < n; i++) scaled[i] = smoothed[i]! * options.strength;
-  const first = scaled[0]!;
-  const last = scaled[n - 1]!;
-  for (let i = 0; i < n; i++) {
-    scaled[i] = scaled[i]! - (first + ((last - first) * i) / (n - 1));
+
+  // The take must still start and end exactly where the guide does. The DTW
+  // pins the raw corners to zero shift, so with anchors the curve is ramped
+  // from zero through the leading and trailing quiet to the first and last
+  // audible frames — the ramp lives where nothing plays. Without anchors,
+  // fall back to subtracting the tilt the smoothing put on the edges; with
+  // them that subtraction would be poison, because a uniformly early double
+  // makes the anchored endpoints carry the correction itself, and de-tilting
+  // against those would subtract the correction back out of the whole take.
+  let firstLoud = 0;
+  while (anchor && firstLoud < n && anchor[firstLoud]! < 0.2) firstLoud++;
+  let lastLoud = n - 1;
+  while (anchor && lastLoud >= 0 && anchor[lastLoud]! < 0.2) lastLoud--;
+
+  if (anchor && firstLoud < lastLoud) {
+    for (let i = 0; i < firstLoud; i++) {
+      scaled[i] = (scaled[firstLoud]! * i) / firstLoud;
+    }
+    for (let i = lastLoud + 1; i < n; i++) {
+      scaled[i] = (scaled[lastLoud]! * (n - 1 - i)) / (n - 1 - lastLoud);
+    }
+  } else {
+    const first = scaled[0]!;
+    const last = scaled[n - 1]!;
+    for (let i = 0; i < n; i++) {
+      scaled[i] = scaled[i]! - (first + ((last - first) * i) / (n - 1));
+    }
   }
 
   // Slope limiting, as a box constraint on the per-frame increments plus the
@@ -74,6 +121,30 @@ export function shapeWarpCurve(map: Float32Array, options: CurveOptions): Float3
   const lowest = Math.max(1e-6, slope / options.maxRatio);
   const highest = slope * options.maxRatio;
 
+  // Hold the resisting frames at their own length.
+  const resist = options.resist;
+  if (resist && resist.length >= n) {
+    for (let i = 0; i < n - 1; i++) {
+      const weight = Math.min(1, Math.max(0, resist[i]!));
+      if (weight > 0) increments[i] = increments[i]! + (slope - increments[i]!) * weight;
+    }
+  }
+
+  // Who takes up the slack. Spreading the correction over every frame equally
+  // would hand the resisting ones their stretch straight back.
+  const share = new Float64Array(n - 1);
+  let shares = 0;
+  for (let i = 0; i < n - 1; i++) {
+    share[i] = resist && resist.length >= n ? 1 - Math.min(1, Math.max(0, resist[i]!)) : 1;
+    shares += share[i]!;
+  }
+  // If nearly everything resisted there is nowhere left to put the correction,
+  // so the whole curve absorbs it after all.
+  if (shares < (n - 1) * 0.05) {
+    for (let i = 0; i < n - 1; i++) share[i] = 1;
+    shares = n - 1;
+  }
+
   for (let pass = 0; pass < LIMIT_PASSES; pass++) {
     let sum = 0;
     let clamped = false;
@@ -85,11 +156,11 @@ export function shapeWarpCurve(map: Float32Array, options: CurveOptions): Float3
     }
 
     const error = sum - slope * (n - 1);
-    if (!clamped && Math.abs(error) < 1e-6) break;
     if (Math.abs(error) < 1e-6) break;
+    void clamped;
 
-    const correction = error / (n - 1);
-    for (let i = 0; i < n - 1; i++) increments[i] = increments[i]! - correction;
+    const correction = error / shares;
+    for (let i = 0; i < n - 1; i++) increments[i] = increments[i]! - correction * share[i]!;
   }
 
   const out = new Float32Array(n);

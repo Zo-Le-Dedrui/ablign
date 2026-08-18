@@ -31,6 +31,7 @@ import {
 } from "./audio/codec.js";
 import {
   alignAgainst,
+  chainReference,
   prepareGuide,
   DEFAULT_SETTINGS,
   type AlignResult,
@@ -56,6 +57,8 @@ interface DialogResult extends Partial<AlignSettings> {
   guide?: number;
   dubs?: number[];
   destination?: Destination;
+  /** Let each double also match against the ones already aligned above it. */
+  chain?: boolean;
 }
 
 type Context = ExtensionContext<"1.0.0">;
@@ -425,9 +428,12 @@ export function activate(activation: ActivationContext) {
       if (group) groupIds.add(group.handle.id);
     }
 
+    const edge = 1e-6;
     const handles: Handle[] = [];
     const names: string[] = [];
     let groupsSkipped = 0;
+    let emptySkipped = 0;
+
     for (const handle of selection.selected_lanes) {
       const object = context.getObjectFromHandle(handle, DataModelObject);
       if (!(object instanceof AudioTrack)) continue;
@@ -435,6 +441,19 @@ export function activate(activation: ActivationContext) {
         groupsSkipped++;
         continue;
       }
+
+      // Dragging a range across three tracks catches the empty one sitting
+      // between them. Rendering it produces silence, aligning silence produces
+      // nonsense, and placing it leaves a bounced empty clip in the Set — so it
+      // never gets that far.
+      const hasAudio = object.arrangementClips.some(
+        (clip) => clip.endTime > from + edge && clip.startTime < to - edge && !clip.muted,
+      );
+      if (!hasAudio) {
+        emptySkipped++;
+        continue;
+      }
+
       handles.push(handle);
       names.push(object.name);
     }
@@ -444,7 +463,9 @@ export function activate(activation: ActivationContext) {
         context,
         groupsSkipped > 0
           ? "Ablign needs at least two ordinary audio tracks. Group tracks cannot be rendered, so they are left out — select the tracks inside the group instead."
-          : "Ablign needs at least two audio tracks: the guide, and one or more doubles. Drag a time range across all of them, then right-click inside it.",
+          : emptySkipped > 0
+            ? "Ablign needs at least two audio tracks with something on them over this range. Tracks that are empty here are left out."
+            : "Ablign needs at least two audio tracks: the guide, and one or more doubles. Drag a time range across all of them, then right-click inside it.",
       );
       return;
     }
@@ -463,16 +484,18 @@ export function activate(activation: ActivationContext) {
         mode: "settings",
         range: `${seconds.toFixed(1)} s selected`,
         tracks: names,
+        chain: false,
         settings: {
           strength: DEFAULT_SETTINGS.strength,
           maxShift: DEFAULT_SETTINGS.maxShiftMs,
           smoothing: DEFAULT_SETTINGS.smoothingMs,
           maxStretch: DEFAULT_SETTINGS.maxStretchPercent,
           gate: DEFAULT_SETTINGS.gateDb,
+          hold: DEFAULT_SETTINGS.holdPercent,
         },
       },
       470,
-      580,
+      610,
     );
 
     if (!answer.apply) return;
@@ -483,8 +506,10 @@ export function activate(activation: ActivationContext) {
       smoothingMs: answer.smoothingMs ?? DEFAULT_SETTINGS.smoothingMs,
       maxStretchPercent: answer.maxStretchPercent ?? DEFAULT_SETTINGS.maxStretchPercent,
       gateDb: answer.gateDb ?? DEFAULT_SETTINGS.gateDb,
+      holdPercent: answer.holdPercent ?? DEFAULT_SETTINGS.holdPercent,
     };
     const destination: Destination = answer.destination ?? "replace";
+    const chain = answer.chain === true;
 
     const guideIndex = answer.guide ?? 0;
     const doubles = (answer.dubs ?? [])
@@ -493,6 +518,9 @@ export function activate(activation: ActivationContext) {
 
     if (groupsSkipped > 0) {
       console.log(`[Ablign] left out ${groupsSkipped} group track(s): they cannot be rendered`);
+    }
+    if (emptySkipped > 0) {
+      console.log(`[Ablign] left out ${emptySkipped} track(s) with nothing over this range`);
     }
 
     const poor: string[] = [];
@@ -528,8 +556,10 @@ export function activate(activation: ActivationContext) {
           if (abortSignal.aborted) return;
 
           // The guide is the same for every double, so its features are worth
-          // computing once even when only one double is queued.
-          const guide = prepareGuide(guideAudio, settings);
+          // computing once even when only one double is queued. With chaining
+          // on it also grows: each aligned take joins the references the next
+          // one gets to match against.
+          let guide = prepareGuide(guideAudio, settings);
           const share = 96 / doubles.length;
 
           for (const [position, index] of doubles.entries()) {
@@ -549,6 +579,14 @@ export function activate(activation: ActivationContext) {
               dubAudio = await renderTrack(context, dubTrack, from, to);
             }
             if (abortSignal.aborted) return;
+
+            // Still silent with monitoring restored: there is genuinely nothing
+            // there. Aligning silence yields nonsense and placing it leaves an
+            // empty bounce behind, so the take is skipped.
+            if (isSilent(dubAudio)) {
+              console.log(`[Ablign] skipped ${dubName}: nothing to align over this range`);
+              continue;
+            }
 
             progress.stage = `aligning ${dubName}`;
             const result = await alignAgainst(guide, dubAudio, settings, {
@@ -573,9 +611,22 @@ export function activate(activation: ActivationContext) {
             if (report.stillPlaying?.length) stillPlaying.push(...report.stillPlaying);
             if (report.rebuilt) rebuilt.push(report.rebuilt);
 
+            // Chained after placing, not before, so a cancelled run leaves
+            // nothing half-referenced.
+            if (chain) guide = chainReference(guide, result, settings);
+
             if (result.cost > MISMATCH_COST) poor.push(dubName);
+            // A correction that reaches the edge of the band was clipped, and
+            // the result is then wrong in a way nothing else reports: the take
+            // is moved as far as it was allowed and no further. Worth saying
+            // plainly, because the fix is a setting rather than a mystery.
+            const clipped = result.peakShiftMs > settings.maxShiftMs * 0.95;
             console.log(
-              `[Ablign] ${dubName} -> ${guideName}: peak shift ${result.peakShiftMs.toFixed(0)} ms, path cost ${result.cost.toFixed(3)}`,
+              `[Ablign] ${dubName} -> ${guideName}: peak shift ${result.peakShiftMs.toFixed(0)} ms, path cost ${result.cost.toFixed(3)}${
+                clipped
+                  ? ` — CLIPPED at the ${settings.maxShiftMs} ms Max shift limit, the correction wanted more`
+                  : ""
+              }`,
             );
           }
 

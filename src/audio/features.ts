@@ -35,6 +35,14 @@ export interface FeatureTrack {
   frameCount: number;
   /** Per-frame loudness in [0, 1]; 0 at or below the gate. */
   loudness: Float32Array;
+  /**
+   * Per-frame share of energy above 3 kHz, 0 to 1.
+   *
+   * Near 1 on s, ch, f, near 0 on any vowel. Cruder than a voicing detector and
+   * enough: the material that must not be stretched is exactly the material
+   * whose energy sits at the top of the band.
+   */
+  sibilance: Float32Array;
   hop: number;
   sampleRate: number;
 }
@@ -99,6 +107,8 @@ export function extractAlignmentFeatures(
   const frameCount = frameCountFor(signal.length);
   const data = new Float32Array(frameCount * FEATURE_SIZE);
   const loudness = new Float32Array(frameCount);
+  const sibilance = new Float32Array(frameCount);
+  const topBin = Math.round((3000 * FFT_SIZE) / sampleRate);
 
   const re = new Float64Array(FFT_SIZE);
   const im = new Float64Array(FFT_SIZE);
@@ -122,7 +132,14 @@ export function extractAlignmentFeatures(
     loudness[frame] = level;
 
     fft.forward(re, im);
-    for (let bin = 0; bin < bins; bin++) magnitude[bin] = Math.hypot(re[bin]!, im[bin]!);
+    let low = 0;
+    let high = 0;
+    for (let bin = 0; bin < bins; bin++) {
+      magnitude[bin] = Math.hypot(re[bin]!, im[bin]!);
+      if (bin < topBin) low += magnitude[bin]!;
+      else high += magnitude[bin]!;
+    }
+    sibilance[frame] = level > 0 ? high / (low + high + 1e-12) : 0;
 
     let melSum = 0;
     for (let band = 0; band < MEL_BANDS; band++) {
@@ -166,5 +183,5 @@ export function extractAlignmentFeatures(
     }
   }
 
-  return { data, frameCount, loudness, hop: HOP, sampleRate };
+  return { data, frameCount, loudness, sibilance, hop: HOP, sampleRate };
 }

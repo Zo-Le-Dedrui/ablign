@@ -14,6 +14,7 @@ import {
 } from "./audio/features.js";
 import { alignFeatureTracks } from "./audio/dtw.js";
 import { peakShiftFrames, shapeWarpCurve } from "./audio/curve.js";
+import { fineEnvelope, refineMap } from "./audio/refine.js";
 import { warpChannels } from "./audio/wsola.js";
 
 export interface AlignSettings {
@@ -31,17 +32,38 @@ export interface AlignSettings {
   maxStretchPercent: number;
   /** Level below which a frame counts as silence, dBFS. */
   gateDb: number;
+  /**
+   * How strongly a take that is already in place resists being moved, 0–100.
+   *
+   * The matcher charges this for every change of pace, priced against what the
+   * material itself costs. At 0 it decides purely on the features, which is the
+   * most accurate reading when they have something to say — and the most
+   * erratic when they do not. Raise it for takes that were tight to begin with:
+   * there the features have no strong opinion, and without a preference the
+   * path wanders.
+   */
+  holdPercent: number;
 }
 
 export const DEFAULT_SETTINGS: AlignSettings = {
   strength: 100,
-  maxShiftMs: 300,
+  // 300 was a guess and too permissive: given that much room the matcher will
+  // reach two syllables away and take the wrong one, which is the wrong-word
+  // failure. Reported from a session as 300 wrong, 100 right. 200 measures
+  // identical to 300 on every bench here and halves the room to go astray;
+  // anything that genuinely needs more says CLIPPED in the log.
+  maxShiftMs: 200,
   smoothingMs: 60,
   // Anything below 100 fights the matcher rather than guiding it: at 40 the
   // limiter spends its budget flattening corrections the path had right, and
   // measured lag against the guide goes from 1.7 ms to 14 ms.
   maxStretchPercent: 100,
   gateDb: -55,
+  // Off by default: it measurably costs accuracy where the features are
+  // informative (2.1 ms of mean lag becomes 5.4), and buys stability only where
+  // they are not (43 ms of spurious drift on an already-tight take becomes 12).
+  // That is a trade to make deliberately, not one to impose.
+  holdPercent: 0,
 };
 
 export interface AlignHooks {
@@ -64,7 +86,10 @@ export interface AlignResult {
  * none of the benefit.
  */
 export interface PreparedGuide {
-  features: FeatureTrack;
+  /** The lead first, then any aligned doubles chained on after it. */
+  features: FeatureTrack[];
+  /** Fine envelope of the lead, for sub-frame refinement of the map. */
+  envelope: Float32Array;
   length: number;
   sampleRate: number;
 }
@@ -73,10 +98,44 @@ export function prepareGuide(guide: DecodedAudio, settings: AlignSettings): Prep
   if (guide.length < FFT_SIZE * 4) {
     throw new Error("Selection is too short to align — use at least half a second.");
   }
+  const mono = toMono(guide);
   return {
-    features: extractAlignmentFeatures(toMono(guide), guide.sampleRate, settings.gateDb),
+    features: [extractAlignmentFeatures(mono, guide.sampleRate, settings.gateDb)],
+    envelope: fineEnvelope(mono),
     length: guide.length,
     sampleRate: guide.sampleRate,
+  };
+}
+
+/**
+ * Adds an already-aligned take to the references a later double will match
+ * against.
+ *
+ * It sits on the guide's timeline now, so it can be compared frame for frame.
+ * A backing part usually resembles the backing part beside it — same register,
+ * same delivery — more closely than it resembles the lead, so having both to
+ * choose from is most useful exactly where the lead alone is ambiguous.
+ */
+export function chainReference(
+  guide: PreparedGuide,
+  aligned: AlignResult,
+  settings: AlignSettings,
+): PreparedGuide {
+  const mono =
+    aligned.channels.length === 1
+      ? aligned.channels[0]!
+      : toMono({
+          sampleRate: aligned.sampleRate,
+          channels: aligned.channels,
+          length: aligned.channels[0]!.length,
+        });
+
+  return {
+    ...guide,
+    features: [
+      ...guide.features,
+      extractAlignmentFeatures(mono, aligned.sampleRate, settings.gateDb),
+    ],
   };
 }
 
@@ -105,12 +164,32 @@ export async function alignAgainst(
     2,
     Math.round((settings.maxShiftMs / 1000) * sampleRate / HOP),
   );
-  const { map, cost } = await alignFeatureTracks(guide.features, dubFeatures, radius, {
+  // 100 on the dial buys a price of 0.05 per pace change, which is where the
+  // sweep stopped gaining stability and kept costing accuracy.
+  const inertia = (Math.min(100, Math.max(0, settings.holdPercent)) / 100) * 0.05;
+
+  const { map, cost } = await alignFeatureTracks(guide.features, dubFeatures, radius, inertia, {
     onProgress: (fraction) => hooks.onStage?.("Matching", 0.15 + fraction * 0.35) ?? Promise.resolve(),
     ...(hooks.shouldAbort ? { shouldAbort: hooks.shouldAbort } : {}),
   });
 
-  const curve = shapeWarpCurve(map, {
+  // Audibility along the path: what the output plays at guide frame i is the
+  // dub's material at map[i], so that is the loudness that anchors the curve.
+  const anchor = new Float32Array(map.length);
+  for (let i = 0; i < map.length; i++) {
+    const at = Math.min(dubFeatures.frameCount - 1, Math.max(0, Math.round(map[i]!)));
+    anchor[i] = dubFeatures.loudness[at]!;
+  }
+
+  // The matcher's map is quantised to its own frames; the audio underneath is
+  // not. Reading the leftover few-millisecond lag off fine envelopes and
+  // bending the map by it is what closes the last visible smear at full
+  // strength.
+  const refined = refineMap(map, guide.envelope, fineEnvelope(dubMono), anchor, sampleRate);
+
+  const curve = shapeWarpCurve(refined, {
+    resist: sibilantRuns(dubFeatures, refined),
+    anchor,
     strength: Math.min(1, Math.max(0, settings.strength / 100)),
     smoothingFrames: Math.max(
       0,
@@ -162,6 +241,51 @@ export async function alignAgainst(
     peakShiftMs: (peakShiftFrames(curve) * HOP * 1000) / sampleRate,
     cost,
   };
+}
+
+/** Sibilance above which a frame counts as an s, ch or f. */
+const SIBILANT_AT = 0.45;
+/** Longest run to protect, in seconds. */
+const SIBILANT_MAX = 0.28;
+
+/**
+ * Marks the guide frames whose dub material is a short sibilant.
+ *
+ * Only short runs. A real s or ch lasts a fraction of a second, and refusing to
+ * stretch anything noisy for as long as it happens to last would hand the
+ * correction nowhere to go — a take that is broadly hissy would simply stop
+ * being alignable.
+ */
+function sibilantRuns(dub: FeatureTrack, map: Float32Array): Float32Array {
+  const resist = new Float32Array(map.length);
+  const longest = Math.round((SIBILANT_MAX * dub.sampleRate) / HOP);
+
+  // Sibilance sampled along the map, so it is indexed by guide frame like the
+  // curve it will shape.
+  const along = new Float32Array(map.length);
+  for (let i = 0; i < map.length; i++) {
+    const at = Math.min(dub.frameCount - 1, Math.max(0, Math.round(map[i]!)));
+    along[i] = dub.sibilance[at]!;
+  }
+
+  let start = -1;
+  for (let i = 0; i <= along.length; i++) {
+    const hot = i < along.length && along[i]! >= SIBILANT_AT;
+    if (hot && start < 0) start = i;
+    if (!hot && start >= 0) {
+      if (i - start <= longest) {
+        // Taper the ends, so the curve bends into and out of the protected run
+        // instead of stepping.
+        const edge = Math.max(1, Math.round((i - start) / 4));
+        for (let k = start; k < i; k++) {
+          const into = Math.min(k - start + 1, i - k, edge) / edge;
+          resist[k] = Math.min(1, into);
+        }
+      }
+      start = -1;
+    }
+  }
+  return resist;
 }
 
 /** One guide, one double — the shape the offline tools use. */

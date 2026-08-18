@@ -70,7 +70,11 @@ It shipped at ±40 % and that was the wrong call: it spent its budget flattening
 
 Sibilants were the one real artefact, and the cause was not obvious. Stretching by a ratio reuses material at a fixed distance of roughly hop x (1 - 1/ratio) — about 293 samples at +40 %, which is a comb near 150 Hz, heard as a metallic whistle. The regularity came from the centre bias: on noise every candidate offset correlates about equally by chance, so the bias decided every grain and put each one exactly on the ideal position. Dropping the bias where nothing periodic is found lets chance spread that distance out. Flatness cost went from −2.5 % to −0.4 % at +12 %, and −4.8 % to −3.3 % at +40 %, with no change to voiced material, transients or alignment accuracy.
 
-`npm run check` runs five suites. `tools/align-check.ts` synthesises a guide take of twelve syllables and doubles that drift in known ways, then measures where the syllables actually landed:
+Sibilants are also left at their own length rather than stretched. Two takes of the same word hold the s differently, and matching them means stretching one — measured at +50 % on a double whose s is half the length of the guide's. A stretched s is where overlap-add sounds worst, and its duration is the least audible thing about it, so short runs of high-frequency energy are held at their own length and the vowels either side absorb the correction. The words still land in the same place; `tools/sibilant-check.ts` guards it.
+
+That costs a little accuracy on the synthetic bench — mean waveform lag goes from 1.9 ms to 3.6 ms — because its syllables are noisy along their whole length and so are partly protected. Real speech is sibilant for a much smaller share of its duration.
+
+`npm run check` runs six suites. `tools/align-check.ts` synthesises a guide take of twelve syllables and doubles that drift in known ways, then measures where the syllables actually landed:
 
 | Check | Result |
 |---|---|

@@ -11,6 +11,15 @@
  */
 
 export interface CurveOptions {
+  /**
+   * Per-frame resistance to being stretched, 0 to 1, indexed like the curve.
+   *
+   * A stretched s hisses: overlap-add has to reuse material, and reused noise
+   * combs against itself. The length of an s is also the least audible thing
+   * about it, so it keeps its own and the correction it would have absorbed
+   * goes to the vowels either side. The words still land in the same place.
+   */
+  resist?: Float32Array;
   /** How much of the measured correction to apply, 0–1. */
   strength: number;
   /** Moving-average half-width, in frames. */
@@ -74,6 +83,30 @@ export function shapeWarpCurve(map: Float32Array, options: CurveOptions): Float3
   const lowest = Math.max(1e-6, slope / options.maxRatio);
   const highest = slope * options.maxRatio;
 
+  // Hold the resisting frames at their own length.
+  const resist = options.resist;
+  if (resist && resist.length >= n) {
+    for (let i = 0; i < n - 1; i++) {
+      const weight = Math.min(1, Math.max(0, resist[i]!));
+      if (weight > 0) increments[i] = increments[i]! + (slope - increments[i]!) * weight;
+    }
+  }
+
+  // Who takes up the slack. Spreading the correction over every frame equally
+  // would hand the resisting ones their stretch straight back.
+  const share = new Float64Array(n - 1);
+  let shares = 0;
+  for (let i = 0; i < n - 1; i++) {
+    share[i] = resist && resist.length >= n ? 1 - Math.min(1, Math.max(0, resist[i]!)) : 1;
+    shares += share[i]!;
+  }
+  // If nearly everything resisted there is nowhere left to put the correction,
+  // so the whole curve absorbs it after all.
+  if (shares < (n - 1) * 0.05) {
+    for (let i = 0; i < n - 1; i++) share[i] = 1;
+    shares = n - 1;
+  }
+
   for (let pass = 0; pass < LIMIT_PASSES; pass++) {
     let sum = 0;
     let clamped = false;
@@ -85,11 +118,11 @@ export function shapeWarpCurve(map: Float32Array, options: CurveOptions): Float3
     }
 
     const error = sum - slope * (n - 1);
-    if (!clamped && Math.abs(error) < 1e-6) break;
     if (Math.abs(error) < 1e-6) break;
+    void clamped;
 
-    const correction = error / (n - 1);
-    for (let i = 0; i < n - 1; i++) increments[i] = increments[i]! - correction;
+    const correction = error / shares;
+    for (let i = 0; i < n - 1; i++) increments[i] = increments[i]! - correction * share[i]!;
   }
 
   const out = new Float32Array(n);

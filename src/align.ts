@@ -111,6 +111,7 @@ export async function alignAgainst(
   });
 
   const curve = shapeWarpCurve(map, {
+    resist: sibilantRuns(dubFeatures, map),
     strength: Math.min(1, Math.max(0, settings.strength / 100)),
     smoothingFrames: Math.max(
       0,
@@ -162,6 +163,51 @@ export async function alignAgainst(
     peakShiftMs: (peakShiftFrames(curve) * HOP * 1000) / sampleRate,
     cost,
   };
+}
+
+/** Sibilance above which a frame counts as an s, ch or f. */
+const SIBILANT_AT = 0.45;
+/** Longest run to protect, in seconds. */
+const SIBILANT_MAX = 0.28;
+
+/**
+ * Marks the guide frames whose dub material is a short sibilant.
+ *
+ * Only short runs. A real s or ch lasts a fraction of a second, and refusing to
+ * stretch anything noisy for as long as it happens to last would hand the
+ * correction nowhere to go — a take that is broadly hissy would simply stop
+ * being alignable.
+ */
+function sibilantRuns(dub: FeatureTrack, map: Float32Array): Float32Array {
+  const resist = new Float32Array(map.length);
+  const longest = Math.round((SIBILANT_MAX * dub.sampleRate) / HOP);
+
+  // Sibilance sampled along the map, so it is indexed by guide frame like the
+  // curve it will shape.
+  const along = new Float32Array(map.length);
+  for (let i = 0; i < map.length; i++) {
+    const at = Math.min(dub.frameCount - 1, Math.max(0, Math.round(map[i]!)));
+    along[i] = dub.sibilance[at]!;
+  }
+
+  let start = -1;
+  for (let i = 0; i <= along.length; i++) {
+    const hot = i < along.length && along[i]! >= SIBILANT_AT;
+    if (hot && start < 0) start = i;
+    if (!hot && start >= 0) {
+      if (i - start <= longest) {
+        // Taper the ends, so the curve bends into and out of the protected run
+        // instead of stepping.
+        const edge = Math.max(1, Math.round((i - start) / 4));
+        for (let k = start; k < i; k++) {
+          const into = Math.min(k - start + 1, i - k, edge) / edge;
+          resist[k] = Math.min(1, into);
+        }
+      }
+      start = -1;
+    }
+  }
+  return resist;
 }
 
 /** One guide, one double — the shape the offline tools use. */

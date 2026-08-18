@@ -137,6 +137,10 @@ for (const [label, settings, allowed] of [
   ["hold off", DEFAULT_SETTINGS, 60],
   ["hold 100", { ...DEFAULT_SETTINGS, holdPercent: 100 }, 15],
   ["hold 100, max shift 600 ms", { ...DEFAULT_SETTINGS, holdPercent: 100, maxShiftMs: 600 }, 15],
+  // Narrowing the band is the other thing that suggests itself, and on this
+  // material it barely moves: 43 ms of drift becomes 32 at a 30 ms band. The
+  // band caps how far the path may go, not how much it wanders inside that.
+  ["max shift 30 ms", { ...DEFAULT_SETTINGS, maxShiftMs: 30 }, 60],
 ] as [string, AlignSettings, number][]) {
   const dub = say(
     ONSETS.map((t, i) => t + tight[i]!),

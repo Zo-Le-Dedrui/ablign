@@ -616,8 +616,17 @@ export function activate(activation: ActivationContext) {
             if (chain) guide = chainReference(guide, result, settings);
 
             if (result.cost > MISMATCH_COST) poor.push(dubName);
+            // A correction that reaches the edge of the band was clipped, and
+            // the result is then wrong in a way nothing else reports: the take
+            // is moved as far as it was allowed and no further. Worth saying
+            // plainly, because the fix is a setting rather than a mystery.
+            const clipped = result.peakShiftMs > settings.maxShiftMs * 0.95;
             console.log(
-              `[Ablign] ${dubName} -> ${guideName}: peak shift ${result.peakShiftMs.toFixed(0)} ms, path cost ${result.cost.toFixed(3)}`,
+              `[Ablign] ${dubName} -> ${guideName}: peak shift ${result.peakShiftMs.toFixed(0)} ms, path cost ${result.cost.toFixed(3)}${
+                clipped
+                  ? ` — CLIPPED at the ${settings.maxShiftMs} ms Max shift limit, the correction wanted more`
+                  : ""
+              }`,
             );
           }
 

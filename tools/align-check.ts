@@ -294,7 +294,7 @@ function waveformLag(take: Float32Array): { mean: number; worst: number } {
 
 const lag = waveformLag(aligned[0]!);
 const lagBefore = waveformLag(stereo.channels[0]!);
-check("waveform lag", lag.mean < 3, `${lagBefore.mean.toFixed(1)} ms -> ${lag.mean.toFixed(1)} ms mean`);
+check("waveform lag", lag.mean < 2.2, `${lagBefore.mean.toFixed(1)} ms -> ${lag.mean.toFixed(1)} ms mean`);
 check("worst syllable", lag.worst < 8, `${lagBefore.worst.toFixed(1)} ms -> ${lag.worst.toFixed(1)} ms`);
 
 // Strength has to be a usable dial across its whole range, not a switch: half

@@ -13,7 +13,7 @@
  * path run along a row for free, mapping an entire held vowel onto one dub
  * frame and stuttering it on playback.
  */
-import { FEATURE_SIZE, type FeatureTrack } from "./features.js";
+import { FEATURE_SIZE, ONSET_SIZE, type FeatureTrack } from "./features.js";
 
 /** Refuse rather than ask Live for a gigabyte. Roughly 10 min at ±300 ms. */
 const MAX_CELLS = 48_000_000;
@@ -25,6 +25,16 @@ const MAX_CELLS = 48_000_000;
  * over the 40 dB above it, so this is a little over 4 dB into that range.
  */
 const SILENT_BELOW = 0.1;
+
+/**
+ * Weight of the onset term against the spectral shape term.
+ *
+ * The shape term is a cosine distance in [0, 2] and speaks on every frame; the
+ * onset term is a Euclidean distance that is zero unless something is starting.
+ * They are summed rather than blended, so this only decides how loudly the
+ * transitions get to speak over the sustains.
+ */
+const ONSET_WEIGHT = 0.15;
 
 const STEP_DIAGONAL = 0;
 const STEP_WIDE = 1; // (i-1, j-2): the dub covers two frames while the guide covers one
@@ -91,21 +101,48 @@ export async function alignFeatureTracks(
   const references = guides
     .filter((track) => track.frameCount === n)
     .map((track) => track.data);
+  const referenceOnsets = guides
+    .filter((track) => track.frameCount === n)
+    .map((track) => track.onset);
   const dubData = dub.data;
+  const dubOnset = dub.onset;
 
   /**
    * Cosine distance in [0, 2]; both sides are unit vectors. With several
    * references, the closest one wins the frame — an average would let a
    * reference that is wrong here blur one that is right.
    */
+  // Priced against the shape term's own spread rather than as an absolute.
+  // These are unit vectors, so a genuine match scores a cosine distance around
+  // a thousandth while a mismatch scores about one — an onset term of a few
+  // hundredths, which looks negligible, is fifty times the margin the shape
+  // term decides by and simply takes over. Measured first, weighted after.
+  let onsetPrice = 0;
+
   const distance = (i: number, j: number): number => {
     const a = i * FEATURE_SIZE;
     const b = j * FEATURE_SIZE;
+    const oa = i * ONSET_SIZE;
+    const ob = j * ONSET_SIZE;
     let best = Infinity;
-    for (const data of references) {
+
+    for (let r = 0; r < references.length; r++) {
+      const data = references[r]!;
       let dot = 0;
       for (let k = 0; k < FEATURE_SIZE; k++) dot += data[a + k]! * dubData[b + k]!;
-      const cost = 1 - dot;
+
+      // Euclidean, not cosine: two frames with nothing starting are both zero
+      // vectors and score zero together, so a sustained passage contributes
+      // nothing here and the shape term decides it alone. A transition in one
+      // take with none in the other is what costs.
+      const onsets = referenceOnsets[r]!;
+      let apart = 0;
+      for (let k = 0; k < ONSET_SIZE; k++) {
+        const d = onsets[oa + k]! - dubOnset[ob + k]!;
+        apart += d * d;
+      }
+
+      const cost = 1 - dot + onsetPrice * Math.sqrt(apart);
       if (cost < best) best = cost;
     }
     return best;
@@ -148,6 +185,29 @@ export async function alignFeatureTracks(
    * mean landing a hair below zero would flip the penalty into a reward for
    * wandering.
    */
+  let shapeSpread = 0;
+  let spreadRows = 0;
+  {
+    const rowStep = Math.max(1, Math.floor(n / 96));
+    for (let i = 0; i < n; i += rowStep) {
+      let low = Infinity;
+      let sum = 0;
+      let cells = 0;
+      for (let j = lo[i]!; j <= hi[i]!; j++) {
+        const cost = distance(i, j);
+        if (cost < low) low = cost;
+        sum += cost;
+        cells++;
+      }
+      if (cells > 0) {
+        shapeSpread += sum / cells - low;
+        spreadRows++;
+      }
+    }
+  }
+  shapeSpread = spreadRows > 0 ? Math.max(0, shapeSpread / spreadRows) : 0;
+  onsetPrice = ONSET_WEIGHT * shapeSpread;
+
   let scale = 0;
   let scaleCells = 0;
   const rowStep = Math.max(1, Math.floor(n / 192));

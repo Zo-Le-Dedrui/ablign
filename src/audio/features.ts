@@ -22,6 +22,9 @@ const MEL_BANDS = 24;
 /** Mel bands plus the quiet axis. */
 export const FEATURE_SIZE = MEL_BANDS + 1;
 
+/** Bands in the separate onset representation. */
+export const ONSET_SIZE = MEL_BANDS;
+
 /** Vocal-relevant span; below 60 Hz is rumble, above 8 kHz is mostly air. */
 const MEL_LOW_HZ = 60;
 const MEL_HIGH_HZ = 8000;
@@ -35,6 +38,26 @@ export interface FeatureTrack {
   frameCount: number;
   /** Per-frame loudness in [0, 1]; 0 at or below the gate. */
   loudness: Float32Array;
+  /**
+   * `frameCount * MEL_BANDS` decaying onset strengths, laid out contiguously.
+   *
+   * Zero wherever nothing is starting, which is the point. Spectral shape says
+   * *what* is sounding and holds steady through a syllable; it is poor at
+   * saying *when* anything changed, and a held vowel looks the same a frame
+   * either side. These say only when, and say nothing the rest of the time.
+   *
+   * Kept apart from `data` rather than appended to it. Folding movement into
+   * the shape vector was tried and made things worse — it adds noise across
+   * every sustained frame, where there is nothing to detect. Compared with a
+   * plain Euclidean distance, two frames that are both mid-vowel score zero
+   * together and contribute nothing to the path; only a transition in one take
+   * without a matching transition in the other costs anything.
+   *
+   * After Ewert, Müller and Grosche, "High Resolution Audio Synchronization
+   * Using Chroma Onset Features" (ICASSP 2009), where the same construction is
+   * built on chroma.
+   */
+  onset: Float32Array;
   /**
    * Per-frame share of energy above 3 kHz, 0 to 1.
    *
@@ -107,6 +130,8 @@ export function extractAlignmentFeatures(
   const frameCount = frameCountFor(signal.length);
   const data = new Float32Array(frameCount * FEATURE_SIZE);
   const loudness = new Float32Array(frameCount);
+  const onset = new Float32Array(frameCount * MEL_BANDS);
+  const previousMel = new Float64Array(MEL_BANDS);
   const sibilance = new Float32Array(frameCount);
   const topBin = Math.round((3000 * FFT_SIZE) / sampleRate);
 
@@ -164,6 +189,19 @@ export function extractAlignmentFeatures(
     }
     norm = Math.sqrt(norm);
 
+    // Half-wave rectified flux per band: what grew since the last frame, and
+    // nothing for what faded. Taken from the log-mel before the shape is
+    // normalised, so it measures the band getting louder rather than the
+    // balance between bands shifting.
+    const onsetAt = frame * MEL_BANDS;
+    if (frame > 0) {
+      for (let band = 0; band < MEL_BANDS; band++) {
+        const grew = mel[band]! + melMean - previousMel[band]!;
+        onset[onsetAt + band] = grew > 0 ? grew : 0;
+      }
+    }
+    for (let band = 0; band < MEL_BANDS; band++) previousMel[band] = mel[band]! + melMean;
+
     const at = frame * FEATURE_SIZE;
     if (norm > 1e-9) {
       const scale = level / norm;
@@ -183,5 +221,39 @@ export function extractAlignmentFeatures(
     }
   }
 
-  return { data, frameCount, loudness, sibilance, hop: HOP, sampleRate };
+  // Decay each band forward in time, so an onset is a short ridge rather than
+  // a one-frame spike. At 5.8 ms per frame a spike is too brittle to line up
+  // against another take; a ridge tolerates a few milliseconds of disagreement
+  // and still pulls the path towards the transition.
+  const halfLife = Math.round((0.045 * sampleRate) / HOP);
+  const decay = Math.pow(0.5, 1 / Math.max(1, halfLife));
+  for (let frame = 1; frame < frameCount; frame++) {
+    const at = frame * MEL_BANDS;
+    const before = at - MEL_BANDS;
+    for (let band = 0; band < MEL_BANDS; band++) {
+      const carried = onset[before + band]! * decay;
+      if (carried > onset[at + band]!) onset[at + band] = carried;
+    }
+  }
+
+  // Normalised against the loudest onset nearby rather than globally, so a
+  // quiet passage still votes. Without this a whispered line would be silent
+  // in the cost matrix next to a belted one.
+  const span = Math.round((1.5 * sampleRate) / HOP);
+  for (let frame = 0; frame < frameCount; frame++) {
+    const from = Math.max(0, frame - span);
+    const to = Math.min(frameCount - 1, frame + span);
+    let loudest = 0;
+    for (let k = from; k <= to; k++) {
+      const at = k * MEL_BANDS;
+      for (let band = 0; band < MEL_BANDS; band++) {
+        if (onset[at + band]! > loudest) loudest = onset[at + band]!;
+      }
+    }
+    if (loudest <= 1e-9) continue;
+    const at = frame * MEL_BANDS;
+    for (let band = 0; band < MEL_BANDS; band++) onset[at + band] = onset[at + band]! / loudest;
+  }
+
+  return { data, frameCount, loudness, sibilance, onset, hop: HOP, sampleRate };
 }

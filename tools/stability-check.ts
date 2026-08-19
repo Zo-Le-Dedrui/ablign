@@ -134,7 +134,7 @@ const tight = [0.004, -0.003, 0.005, -0.002, 0.003, -0.004, 0.002, -0.003];
 // Hold off is the default and is allowed to wander; the point of the control
 // is that raising it stops the wandering, so that is what is asserted.
 for (const [label, settings, allowed] of [
-  ["hold off", DEFAULT_SETTINGS, 60],
+  ["hold off", DEFAULT_SETTINGS, 25],
   ["hold 100", { ...DEFAULT_SETTINGS, holdPercent: 100 }, 15],
   ["hold 100, max shift 600 ms", { ...DEFAULT_SETTINGS, holdPercent: 100, maxShiftMs: 600 }, 15],
   // Narrowing the band is the other thing that suggests itself, and on this

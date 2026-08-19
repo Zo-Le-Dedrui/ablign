@@ -194,7 +194,7 @@ for (const [label, settings] of [
   );
 
   check(`long syllables land, ${label}`, longAfter < 12, `${longAfter.toFixed(1)} ms`);
-  check(`short syllables land, ${label}`, shortAfter < 15, `${shortBefore.toFixed(1)} ms -> ${shortAfter.toFixed(1)} ms`);
+  check(`short syllables land, ${label}`, shortAfter < 5, `${shortBefore.toFixed(1)} ms -> ${shortAfter.toFixed(1)} ms`);
   // The whole point: a short syllable should not be markedly worse served than
   // a long one just for being short.
   check(

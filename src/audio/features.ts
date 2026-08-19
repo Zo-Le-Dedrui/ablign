@@ -22,6 +22,9 @@ const MEL_BANDS = 24;
 /** Mel bands plus the quiet axis. */
 export const FEATURE_SIZE = MEL_BANDS + 1;
 
+/** Share of the local loudest onset below which a rise is treated as nothing. */
+const ONSET_FLOOR = 0.05;
+
 /** Bands in the separate onset representation. */
 export const ONSET_SIZE = MEL_BANDS;
 
@@ -221,6 +224,25 @@ export function extractAlignmentFeatures(
     }
   }
 
+  // Smooth the flux across three frames before anything else.
+  //
+  // Half-wave rectified flux on noisy material is largely noise: a breathy
+  // syllable grows in some band on almost every frame by chance, and those
+  // chance rises are what the matcher then tries to line up. Averaging over
+  // 17 ms leaves a real transition — which grows across many bands at once and
+  // over several frames — and flattens the rest.
+  const smoothed = new Float32Array(onset.length);
+  for (let frame = 0; frame < frameCount; frame++) {
+    const at = frame * MEL_BANDS;
+    const before = Math.max(0, frame - 1) * MEL_BANDS;
+    const after = Math.min(frameCount - 1, frame + 1) * MEL_BANDS;
+    for (let band = 0; band < MEL_BANDS; band++) {
+      smoothed[at + band] =
+        (onset[before + band]! + onset[at + band]! + onset[after + band]!) / 3;
+    }
+  }
+  onset.set(smoothed);
+
   // Decay each band forward in time, so an onset is a short ridge rather than
   // a one-frame spike. At 5.8 ms per frame a spike is too brittle to line up
   // against another take; a ridge tolerates a few milliseconds of disagreement
@@ -252,7 +274,15 @@ export function extractAlignmentFeatures(
     }
     if (loudest <= 1e-9) continue;
     const at = frame * MEL_BANDS;
-    for (let band = 0; band < MEL_BANDS; band++) onset[at + band] = onset[at + band]! / loudest;
+    for (let band = 0; band < MEL_BANDS; band++) {
+      const value = onset[at + band]! / loudest;
+      // Only what stands out. A real transition is broadband and decisive; the
+      // rest is a band that happened to grow a little, and on breathy material
+      // that happens somewhere on almost every frame. Two takes carry different
+      // breath, so those chance rises never agree and only add disagreement
+      // where the alignment was already right.
+      onset[at + band] = value < ONSET_FLOOR ? 0 : (value - ONSET_FLOOR) / (1 - ONSET_FLOOR);
+    }
   }
 
   return { data, frameCount, loudness, sibilance, onset, hop: HOP, sampleRate };

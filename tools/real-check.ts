@@ -66,20 +66,76 @@ const dub = trim(load(dubPath), guideFull.length);
 const guideOnsets = onsets(toMono(guide), guide.sampleRate);
 
 /**
- * For every onset in the guide, how far the nearest onset in the other take
- * sits. Reported as a list as well as a mean, because the shape of the errors
- * is the diagnosis: a steady drift is a rate problem, isolated jumps of half a
- * second are syllables landing on the wrong neighbour.
+ * Where each guide onset's counterpart landed, in ms, signed.
+ *
+ * Matched monotonically and one-to-one, not by nearest neighbour. Nearest
+ * neighbour was the first ruler here and it lies: stretching can pull two close
+ * attacks together until the detector reports one instead of two, and the guide
+ * onset that lost its counterpart then measures against a *neighbouring*
+ * syllable instead. That reads as a syllable landing 168 ms out when nothing of
+ * the sort happened — caught by two runs whose DTW cost was identical to three
+ * decimals, so the path was the same and only a few ms of sub-frame bending
+ * differed, yet the two disagreed by 132 ms of "worst case".
+ *
+ * Singing is monotonic, so the assignment must be. Skipping a detected onset is
+ * free (the double may have attacks the lead has not); skipping a guide onset
+ * costs MISSING, and those come back as NaN so they can be counted rather than
+ * silently scored against the wrong neighbour.
  */
+const MISSING = 0.25;
+
 function errors(audio: DecodedAudio): number[] {
   const found = onsets(toMono(audio), audio.sampleRate);
-  return guideOnsets.map((want) => {
-    let best = Infinity;
-    for (const got of found) {
-      if (Math.abs(got - want) < Math.abs(best)) best = got - want;
+  const n = guideOnsets.length;
+  const m = found.length;
+  const width = m + 1;
+
+  const dp = new Float64Array((n + 1) * width).fill(Infinity);
+  const from = new Uint8Array((n + 1) * width);
+  dp[0] = 0;
+  for (let j = 1; j <= m; j++) {
+    dp[j] = 0; // leading detections the guide does not claim are free
+    from[j] = 2;
+  }
+
+  for (let i = 1; i <= n; i++) {
+    for (let j = 0; j <= m; j++) {
+      // Leave this guide onset unmatched.
+      let best = dp[(i - 1) * width + j]! + MISSING;
+      let choice = 1;
+      if (j > 0) {
+        const pair = dp[(i - 1) * width + j - 1]! + Math.abs(guideOnsets[i - 1]! - found[j - 1]!);
+        if (pair < best) {
+          best = pair;
+          choice = 0;
+        }
+        const skip = dp[i * width + j - 1]!;
+        if (skip < best) {
+          best = skip;
+          choice = 2;
+        }
+      }
+      dp[i * width + j] = best;
+      from[i * width + j] = choice;
     }
-    return best * 1000;
-  });
+  }
+
+  const out = new Array<number>(n).fill(NaN);
+  let i = n;
+  let j = m;
+  while (i > 0) {
+    const choice = from[i * width + j]!;
+    if (choice === 0) {
+      out[i - 1] = (found[j - 1]! - guideOnsets[i - 1]!) * 1000;
+      i--;
+      j--;
+    } else if (choice === 1) {
+      i--;
+    } else {
+      j--;
+    }
+  }
+  return out;
 }
 
 /**
@@ -101,14 +157,17 @@ const PAIRED_WITHIN = 150;
 const unaligned = errors(dub);
 const paired = guideOnsets
   .map((_, i) => i)
-  .filter((i) => Math.abs(unaligned[i]!) <= PAIRED_WITHIN);
+  .filter((i) => !Number.isNaN(unaligned[i]!) && Math.abs(unaligned[i]!) <= PAIRED_WITHIN);
 
 const summarise = (values: number[]) => {
-  const absolute = paired.map((i) => Math.abs(values[i]!));
-  const mean = absolute.reduce((a, b) => a + b, 0) / absolute.length;
-  const worst = Math.max(...absolute);
+  // A syllable the detector could not find at all is counted as lost rather
+  // than scored against a neighbour, which is what the old ruler did wrong.
+  const lost = paired.filter((i) => Number.isNaN(values[i]!)).length;
+  const absolute = paired.filter((i) => !Number.isNaN(values[i]!)).map((i) => Math.abs(values[i]!));
+  const mean = absolute.length ? absolute.reduce((a, b) => a + b, 0) / absolute.length : 0;
+  const worst = absolute.length ? Math.max(...absolute) : 0;
   const wrong = absolute.filter((v) => v > 60).length;
-  return { mean, worst, wrong };
+  return { mean, worst, wrong, lost };
 };
 
 console.log(
@@ -129,7 +188,7 @@ for (const [label, setting] of settings) {
     errors({ sampleRate: result.sampleRate, channels: result.channels, length: result.channels[0]!.length }),
   );
   console.log(
-    `  ${label.padEnd(18)} mean ${summary.mean.toFixed(0).padStart(4)} ms   worst ${summary.worst.toFixed(0).padStart(4)} ms   ${summary.wrong} past 60 ms   (peak shift ${result.peakShiftMs.toFixed(0)} ms, cost ${result.cost.toFixed(3)})`,
+    `  ${label.padEnd(18)} mean ${summary.mean.toFixed(0).padStart(4)} ms   worst ${summary.worst.toFixed(0).padStart(4)} ms   ${summary.wrong} past 60 ms, ${summary.lost} lost   (peak shift ${result.peakShiftMs.toFixed(0)} ms, cost ${result.cost.toFixed(3)})`,
   );
 }
 console.log();

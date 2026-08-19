@@ -12,7 +12,7 @@ import {
   HOP,
   type FeatureTrack,
 } from "./audio/features.js";
-import { alignFeatureTracks } from "./audio/dtw.js";
+import { alignFeatureTracks, coarsen } from "./audio/dtw.js";
 import { peakShiftFrames, shapeWarpCurve } from "./audio/curve.js";
 import { fineEnvelope, refineMap } from "./audio/refine.js";
 import { warpChannels } from "./audio/wsola.js";
@@ -168,10 +168,37 @@ export async function alignAgainst(
   // sweep stopped gaining stability and kept costing accuracy.
   const inertia = (Math.min(100, Math.max(0, settings.holdPercent)) / 100) * 0.05;
 
-  const { map, cost } = await alignFeatureTracks(guide.features, dubFeatures, radius, inertia, {
+  // Coarse pass first, at a quarter of the resolution, to settle the global
+  // structure where there is least local ambiguity to trip over. Its answer
+  // then centres the fine pass's band, so the fine pass can be narrow.
+  let coarsePath: Float32Array | undefined;
+  if (dubFeatures.frameCount > COARSE_FACTOR * 8) {
+    const coarse = await alignFeatureTracks(
+      guide.features.map((track) => coarsen(track, COARSE_FACTOR)),
+      coarsen(dubFeatures, COARSE_FACTOR),
+      Math.max(2, Math.round(radius / COARSE_FACTOR)),
+      inertia,
+    );
+
+    // Back up to fine frames, interpolating between coarse steps.
+    const guideFrames = guide.features[0]!.frameCount;
+    coarsePath = new Float32Array(guideFrames);
+    for (let i = 0; i < guideFrames; i++) {
+      const at = Math.min(coarse.map.length - 1, i / COARSE_FACTOR);
+      const low = Math.floor(at);
+      const high = Math.min(coarse.map.length - 1, low + 1);
+      const blend = at - low;
+      coarsePath[i] =
+        (coarse.map[low]! + (coarse.map[high]! - coarse.map[low]!) * blend) * COARSE_FACTOR;
+    }
+  }
+
+  const fineRadius = coarsePath ? Math.max(2, Math.round(radius / FINE_DIVISOR)) : radius;
+
+  const { map, cost } = await alignFeatureTracks(guide.features, dubFeatures, fineRadius, inertia, {
     onProgress: (fraction) => hooks.onStage?.("Matching", 0.15 + fraction * 0.35) ?? Promise.resolve(),
     ...(hooks.shouldAbort ? { shouldAbort: hooks.shouldAbort } : {}),
-  });
+  }, coarsePath);
 
   // Audibility along the path: what the output plays at guide frame i is the
   // dub's material at map[i], so that is the loudness that anchors the curve.
@@ -242,6 +269,11 @@ export async function alignAgainst(
     cost,
   };
 }
+
+/** How much coarser the first pass runs. */
+const COARSE_FACTOR = 2;
+/** How much narrower the fine band is once a coarse pass has centred it. */
+const FINE_DIVISOR = 1;
 
 /** Sibilance above which a frame counts as an s, ch or f. */
 const SIBILANT_AT = 0.45;

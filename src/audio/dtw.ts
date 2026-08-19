@@ -68,6 +68,7 @@ export async function alignFeatureTracks(
   radius: number,
   inertia: number,
   progress: DtwProgress = {},
+  centre?: Float32Array,
 ): Promise<DtwResult> {
   const guide = guides[0]!;
   const n = guide.frameCount;
@@ -82,10 +83,14 @@ export async function alignFeatureTracks(
   const hi = new Int32Array(n);
   const offset = new Int32Array(n + 1);
   let cells = 0;
+  const guided = centre && centre.length === n ? centre : undefined;
+
   for (let i = 0; i < n; i++) {
-    const centre = i * slope;
-    lo[i] = Math.max(0, Math.floor(centre) - radius);
-    hi[i] = Math.min(m - 1, Math.ceil(centre) + radius);
+    // Centred on the diagonal by default; on a coarse pass's answer when there
+    // is one, which is what lets a fine pass use a much narrower band.
+    const middle = guided ? guided[i]! : i * slope;
+    lo[i] = Math.max(0, Math.floor(middle) - radius);
+    hi[i] = Math.min(m - 1, Math.ceil(middle) + radius);
     offset[i] = cells;
     cells += hi[i]! - lo[i]! + 1;
   }
@@ -367,4 +372,66 @@ export async function alignFeatureTracks(
   map[n - 1] = m - 1;
 
   return { map, cost: endCost / Math.max(1, steps) };
+}
+
+/**
+ * A feature track at a coarser time resolution.
+ *
+ * Frames are averaged in groups of `factor` and renormalised. A coarse pass has
+ * fewer, blunter frames, and that is the point: local ambiguity is what sends a
+ * path two syllables away, and at a quarter of the resolution there is much
+ * less of it to trip over. Its answer then confines the fine pass to a narrow
+ * band, so the fine pass keeps its precision without keeping its freedom to
+ * wander off.
+ *
+ * Onsets are carried across as a maximum rather than a mean: they are sparse by
+ * construction, and averaging would dilute exactly what makes them useful.
+ */
+export function coarsen(track: FeatureTrack, factor: number): FeatureTrack {
+  const frames = Math.max(2, Math.floor(track.frameCount / factor));
+  const data = new Float32Array(frames * FEATURE_SIZE);
+  const onset = new Float32Array(frames * ONSET_SIZE);
+  const loudness = new Float32Array(frames);
+  const sibilance = new Float32Array(frames);
+
+  for (let coarse = 0; coarse < frames; coarse++) {
+    const from = coarse * factor;
+    const to = Math.min(track.frameCount, from + factor);
+    const at = coarse * FEATURE_SIZE;
+    const onsetAt = coarse * ONSET_SIZE;
+
+    for (let k = from; k < to; k++) {
+      const source = k * FEATURE_SIZE;
+      for (let d = 0; d < FEATURE_SIZE; d++) data[at + d] = data[at + d]! + track.data[source + d]!;
+      loudness[coarse] = loudness[coarse]! + track.loudness[k]!;
+      sibilance[coarse] = sibilance[coarse]! + track.sibilance[k]!;
+
+      const onsetSource = k * ONSET_SIZE;
+      for (let d = 0; d < ONSET_SIZE; d++) {
+        if (track.onset[onsetSource + d]! > onset[onsetAt + d]!) {
+          onset[onsetAt + d] = track.onset[onsetSource + d]!;
+        }
+      }
+    }
+
+    const count = Math.max(1, to - from);
+    loudness[coarse] = loudness[coarse]! / count;
+    sibilance[coarse] = sibilance[coarse]! / count;
+
+    // Back to unit length, so the cosine distance means the same thing here.
+    let norm = 0;
+    for (let d = 0; d < FEATURE_SIZE; d++) norm += data[at + d]! * data[at + d]!;
+    norm = Math.sqrt(norm);
+    if (norm > 1e-9) for (let d = 0; d < FEATURE_SIZE; d++) data[at + d] = data[at + d]! / norm;
+  }
+
+  return {
+    data,
+    frameCount: frames,
+    loudness,
+    sibilance,
+    onset,
+    hop: track.hop * factor,
+    sampleRate: track.sampleRate,
+  };
 }
